@@ -1,0 +1,69 @@
+# Nightly publish: merges everything on the "drafts" branch into "main".
+# Cloudflare Pages watches "main", so the merge is what makes new games go live.
+#
+# Schedule: 15:00 UTC = 2am Melbourne in daylight saving (AEDT), 1am in winter (AEST).
+# GitHub schedules run in UTC and can start a few minutes late. That's normal.
+# You can also run it by hand: GitHub > Actions > Nightly publish > Run workflow.
+
+name: Nightly publish
+
+on:
+  schedule:
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Is there anything new on drafts?
+        id: check
+        run: |
+          git fetch origin drafts
+          AHEAD=$(git rev-list --count main..origin/drafts)
+          echo "Commits waiting on drafts: $AHEAD"
+          echo "ahead=$AHEAD" >> "$GITHUB_OUTPUT"
+
+      - name: Merge drafts into main
+        if: steps.check.outputs.ahead != '0'
+        run: |
+          git config user.name  "nightly-publish-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git merge --no-ff origin/drafts -m "Nightly publish $(TZ=Australia/Melbourne date +%Y-%m-%d)"
+
+      - name: Validate games (a broken game is skipped, never published half-made)
+        if: steps.check.outputs.ahead != '0'
+        run: |
+          node scripts/build-manifest.mjs
+          node -e "const m=require('./games.json'); if(!m.count){console.log('::error::No valid games found. Not publishing.'); process.exit(1)}"
+
+      - name: Push to main (this triggers the Cloudflare deploy)
+        if: steps.check.outputs.ahead != '0'
+        run: git push origin main
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.check.outputs.ahead }}" = "0" ]; then
+            echo "Nothing new on drafts tonight. Site unchanged." >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f games.json ]; then
+            echo "Published. Live games: $(node -p "require('./games.json').count")" >> "$GITHUB_STEP_SUMMARY"
+          fi
