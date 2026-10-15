@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Sun Catcher</title>
+<!--
+  ARCADE GAME TEMPLATE  (copy this whole folder to start a new game)
+  Rules every game follows (full list in GAME-RULES.md):
+   - One self-contained file. No outside scripts, fonts, images or network calls.
+   - Works with touch AND keyboard. Fills any screen size.
+   - Pauses when the tab is hidden. Has a mute button. No sound until the player taps.
+   - No links out of the game except the "Arcade" back button (switched off for portal builds).
+   - No ads, chat, sign-ups or personal data.
+-->
+<style>
+  :root { --bg:#14213d; --ink:#fff; --accent:#ffb020; --ui:#ffffff22; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif; overflow:hidden;
+    touch-action:none; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent; }
+  canvas { display:block; width:100vw; height:100vh; height:100dvh; }
+  .hud { position:fixed; top:0; left:0; right:0; display:flex; justify-content:space-between; align-items:center;
+    padding:max(10px, env(safe-area-inset-top)) 12px 10px; pointer-events:none; font-weight:800; font-size:20px; }
+  .hud .btns { display:flex; gap:8px; pointer-events:auto; }
+  .btn { font:inherit; font-size:16px; color:var(--ink); background:var(--ui); border:0; border-radius:999px;
+    padding:8px 14px; cursor:pointer; text-decoration:none; }
+  .overlay { position:fixed; inset:0; display:grid; place-items:center; text-align:center; background:#0008; padding:24px; }
+  .overlay[hidden] { display:none; }
+  .panel h1 { margin:0 0 8px; font-size:clamp(32px,8vw,56px); color:var(--accent); }
+  .panel p { margin:6px 0; font-size:18px; opacity:.9; }
+  .play { font:inherit; font-size:24px; font-weight:800; margin-top:18px; padding:14px 36px; border:0; border-radius:999px;
+    background:var(--accent); color:#14213d; cursor:pointer; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="hud">
+  <span>Score <span id="score">0</span></span>
+  <div class="btns">
+    <button class="btn" id="mute" aria-label="Sound on or off">🔊</button>
+    <button class="btn" id="pause" aria-label="Pause">⏸</button>
+    <a class="btn" id="home" href="../../">Arcade</a>
+  </div>
+</div>
+
+<div class="overlay" id="menu">
+  <div class="panel">
+    <h1>Sun Catcher</h1>
+    <p>Catch the suns. Dodge the rain clouds.</p>
+    <p>Drag, tap left/right, or use the arrow keys.</p>
+    <p id="best"></p>
+    <button class="play" id="play">Play</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ===== SETTINGS =====
+  const GAME_ID = 'sun-catcher';     // must match the folder name (used for saving best score)
+  const PORTAL_BUILD = false;        // true when uploading to CrazyGames / itch.io etc. Hides the Arcade link.
+
+  // ===== SHELL: screen, input, pause, sound, saving. Keep this part in every game. =====
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+  let W = 0, H = 0, DPR = 1;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    cv.width = W * DPR; cv.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  addEventListener('resize', resize); resize();
+
+  if (PORTAL_BUILD) document.getElementById('home').remove();
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(GAME_ID + ':' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(GAME_ID + ':' + k, JSON.stringify(v)); } catch {} }
+  };
+
+  const keys = {};
+  addEventListener('keydown', e => { keys[e.key] = true; if (e.key === ' ' || e.key.startsWith('Arrow')) e.preventDefault(); if (e.key === 'p' || e.key === 'Escape') togglePause(); });
+  addEventListener('keyup', e => { keys[e.key] = false; });
+  let pointerX = null;
+  cv.addEventListener('pointerdown', e => { pointerX = e.clientX; });
+  cv.addEventListener('pointermove', e => { if (e.buttons || e.pointerType === 'touch') pointerX = e.clientX; });
+  addEventListener('pointerup', () => { pointerX = null; });
+
+  // Sound: tiny beeps made in code, so no audio files. Only starts after the player taps Play.
+  let audio = null, muted = store.get('muted', false);
+  const muteBtn = document.getElementById('mute');
+  const showMute = () => { muteBtn.textContent = muted ? '🔇' : '🔊'; };
+  showMute();
+  muteBtn.onclick = () => { muted = !muted; store.set('muted', muted); showMute(); };
+  function beep(freq = 600, dur = 0.08, type = 'sine', vol = 0.15) {
+    if (muted || !audio) return;
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = type; o.frequency.value = freq; g.gain.value = vol;
+    g.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + dur);
+    o.connect(g).connect(audio.destination); o.start(); o.stop(audio.currentTime + dur);
+  }
+
+  let running = false, paused = false;
+  const pauseBtn = document.getElementById('pause');
+  function togglePause(force) {
+    if (!running) return;
+    paused = force !== undefined ? force : !paused;
+    pauseBtn.textContent = paused ? '▶' : '⏸';
+    if (audio) paused ? audio.suspend() : audio.resume();
+  }
+  pauseBtn.onclick = () => togglePause();
+  document.addEventListener('visibilitychange', () => { if (document.hidden) togglePause(true); });
+  addEventListener('blur', () => togglePause(true));
+
+  // ===== THE GAME (replace everything in this section) =====
+  const menu = document.getElementById('menu');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  let best = store.get('best', 0);
+  const showBest = () => { bestEl.textContent = best ? 'Best: ' + best : ''; };
+  showBest();
+
+  let player = null, items = [], score = 0, lives = 3, spawnT = 0, speed = 160;
+
+  function start() {
+    if (!audio) { try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch {} }
+    player = { x: W / 2, w: Math.max(70, W * 0.14), h: 16 };
+    items = []; score = 0; lives = 3; spawnT = 0; speed = 160;
+    scoreEl.textContent = 0;
+    menu.hidden = true; running = true; togglePause(false);
+  }
+  document.getElementById('play').onclick = start;
+
+  function gameOver() {
+    running = false;
+    beep(180, 0.4, 'triangle');
+    if (score > best) { best = score; store.set('best', best); }
+    showBest();
+    menu.querySelector('h1').textContent = 'Game over';
+    menu.querySelector('.play').textContent = 'Play again';
+    menu.querySelector('p').textContent = 'You caught ' + score + (score === 1 ? ' sun!' : ' suns!');
+    menu.hidden = false;
+  }
+
+  function update(dt) {
+    const move = 520 * dt;
+    if (keys.ArrowLeft || keys.a) player.x -= move;
+    if (keys.ArrowRight || keys.d) player.x += move;
+    if (pointerX !== null) player.x += (pointerX - player.x) * Math.min(1, dt * 14);
+    player.x = Math.max(player.w / 2, Math.min(W - player.w / 2, player.x));
+
+    speed += dt * 6;
+    spawnT -= dt;
+    if (spawnT <= 0) {
+      spawnT = Math.max(0.35, 0.9 - score * 0.01);
+      items.push({ x: 20 + Math.random() * (W - 40), y: -30, r: 16, bad: Math.random() < 0.28 });
+    }
+    const py = H - 60;
+    for (const it of items) {
+      it.y += speed * dt;
+      if (!it.done && it.y + it.r > py && it.y - it.r < py + player.h && Math.abs(it.x - player.x) < player.w / 2 + it.r) {
+        it.done = true;
+        if (it.bad) { lives--; beep(140, 0.25, 'square', 0.1); if (lives <= 0) return gameOver(); }
+        else { score++; scoreEl.textContent = score; beep(520 + score * 8, 0.08); }
+      }
+      if (!it.done && it.y - it.r > H) { it.done = true; }
+    }
+    items = items.filter(it => !it.done);
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    for (const it of items) {
+      if (it.bad) {
+        ctx.fillStyle = '#8fa3c7';
+        ctx.beginPath(); ctx.arc(it.x - 10, it.y, 12, 0, 7); ctx.arc(it.x + 8, it.y - 4, 15, 0, 7); ctx.arc(it.x + 16, it.y + 4, 10, 0, 7); ctx.fill();
+      } else {
+        ctx.fillStyle = '#ffb020';
+        ctx.beginPath(); ctx.arc(it.x, it.y, it.r, 0, 7); ctx.fill();
+        ctx.strokeStyle = '#ffe08a'; ctx.lineWidth = 3;
+        for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; ctx.beginPath(); ctx.moveTo(it.x + Math.cos(a) * 20, it.y + Math.sin(a) * 20); ctx.lineTo(it.x + Math.cos(a) * 27, it.y + Math.sin(a) * 27); ctx.stroke(); }
+      }
+    }
+    if (player) {
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.roundRect(player.x - player.w / 2, H - 60, player.w, player.h, 8); ctx.fill();
+      ctx.font = '22px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText('❤️'.repeat(Math.max(0, lives)), 12, H - 20);
+    }
+    if (paused && running) {
+      ctx.fillStyle = '#0008'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 40px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('Paused', W / 2, H / 2);
+    }
+  }
+
+  // ===== LOOP (keep) =====
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (running && !paused) update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
