@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- SITE NAME: change it here and in the <h1> below -->
+<title>Sunbeam Arcade</title>
+<meta name="description" content="Free browser games made by Sunshine and Lollipops. No downloads, no sign-up. Play on phone, tablet or computer.">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<header class="hero">
+  <div class="sun" aria-hidden="true"></div>
+  <h1>Sunbeam Arcade</h1>
+  <p class="tagline">Free games made by Sunshine and Lollipops. Tap one and play.</p>
+</header>
+
+<main class="wrap">
+  <div class="toolbar">
+    <div class="chips" id="chips" role="group" aria-label="Filter by maker"></div>
+    <input id="search" type="search" placeholder="Search games" aria-label="Search games" autocomplete="off">
+  </div>
+
+  <p id="status" class="status">Loading games...</p>
+  <ul id="grid" class="grid"></ul>
+</main>
+
+<footer class="foot">
+  <!-- TIP BUTTON: paste your Ko-fi or Buy Me a Coffee link into href, then delete the "hidden" attribute -->
+  <a id="tip" class="tip" href="#" target="_blank" rel="noopener" hidden>Help Sunshine and Lollipops make more games</a>
+  <p><a href="privacy.html">Privacy</a> · No accounts, no tracking, no personal data collected.</p>
+</footer>
+
+<script>
+(() => {
+  const grid = document.getElementById('grid');
+  const status = document.getElementById('status');
+  const chips = document.getElementById('chips');
+  const search = document.getElementById('search');
+  let games = [];
+  let maker = 'All';
+
+  const NEW_DAYS = 14;
+  const isNew = (d) => (Date.now() - new Date(d + 'T00:00:00').getTime()) / 864e5 <= NEW_DAYS;
+
+  // Every game gets a bright fallback tile if it has no thumbnail
+  const hue = (s) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
+
+  function card(g) {
+    const li = document.createElement('li');
+    li.className = 'card';
+    const a = document.createElement('a');
+    a.href = g.url;
+
+    const art = document.createElement('div');
+    art.className = 'art';
+    if (g.thumbnail) {
+      const img = document.createElement('img');
+      img.src = g.thumbnail; img.alt = ''; img.loading = 'lazy';
+      art.appendChild(img);
+    } else {
+      art.style.setProperty('--h', hue(g.slug));
+      art.textContent = g.title.slice(0, 1).toUpperCase();
+      art.classList.add('fallback');
+    }
+    if (isNew(g.added)) {
+      const b = document.createElement('span');
+      b.className = 'badge'; b.textContent = 'NEW';
+      art.appendChild(b);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'body';
+    const h = document.createElement('h2'); h.textContent = g.title;
+    const by = document.createElement('p'); by.className = 'by'; by.textContent = 'by ' + g.creator;
+    const d = document.createElement('p'); d.className = 'desc'; d.textContent = g.description;
+    body.append(h, by, d);
+
+    a.append(art, body);
+    li.appendChild(a);
+    return li;
+  }
+
+  function render() {
+    const q = search.value.trim().toLowerCase();
+    const shown = games.filter(g =>
+      (maker === 'All' || g.creator.toLowerCase().includes(maker.toLowerCase())) &&
+      (!q || (g.title + ' ' + g.description + ' ' + g.tags.join(' ')).toLowerCase().includes(q)));
+    grid.replaceChildren(...shown.map(card));
+    status.textContent = shown.length ? '' : (games.length ? 'No games match that.' : 'Games coming soon!');
+    status.hidden = !!shown.length;
+  }
+
+  function buildChips() {
+    const names = new Set();
+    games.forEach(g => g.creator.split(/\s*(?:&|and|,)\s*/i).forEach(n => n && names.add(n)));
+    ['All', ...[...names].sort()].forEach(n => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = n;
+      b.setAttribute('aria-pressed', n === maker);
+      b.onclick = () => {
+        maker = n;
+        chips.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b));
+        render();
+      };
+      chips.appendChild(b);
+    });
+  }
+
+  fetch('games.json', { cache: 'no-cache' })
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(m => { games = m.games || []; buildChips(); render(); })
+    .catch(() => { status.textContent = 'Could not load the games list. Try refreshing.'; });
+
+  search.addEventListener('input', render);
+
+  const tip = document.getElementById('tip');
+  if (tip.getAttribute('href') !== '#') tip.hidden = false;
+})();
+</script>
+</body>
+</html>
