@@ -16,7 +16,8 @@ Free browser games made by Sunshine and Lollipops. Plain HTML, no frameworks, no
 │   ├── _template/              Starter game. Folders starting with _ are never published
 │   └── <game-id>/              One folder per game: index.html + game.json (+ thumb.png)
 ├── scripts/
-│   └── build-manifest.mjs      Scans /games, checks each one, writes games.json
+│   ├── build-manifest.mjs      Scans /games, checks each one, writes games.json
+│   └── make-thumbs.mjs         Screenshots any game without a cover picture (runs at publish)
 └── .github/workflows/
     └── nightly-publish.yml     2am: merge drafts into main, which triggers the deploy
 ```

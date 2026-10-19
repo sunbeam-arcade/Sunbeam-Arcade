@@ -15,7 +15,8 @@ games/
   space-dodge/          <- folder name = the game's ID
     index.html          <- the whole game, one file
     game.json           <- title, creator, description (see below)
-    thumb.png           <- optional cover picture, 16:10 (e.g. 640 x 400)
+    thumb.png           <- optional cover picture, 16:10 (e.g. 640 x 400). If missing, one is
+                           made automatically from a screenshot of the game at publish time.
 ```
 
 **Folder name:** lowercase words joined with hyphens, no spaces. Example: `lava-jump`, `sun-catcher-2`. Must be unique and must match `GAME_ID` inside the game.

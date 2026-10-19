@@ -49,6 +49,16 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git merge --no-ff origin/drafts -m "Nightly publish $(TZ=Australia/Melbourne date +%Y-%m-%d)"
 
+      - name: Make cover pictures for games that don't have one
+        if: steps.check.outputs.ahead != '0'
+        continue-on-error: true   # a picture problem never blocks publishing
+        run: |
+          npm i --no-save --no-audit --no-fund playwright@1.56.0
+          npx playwright install --with-deps chromium
+          node scripts/make-thumbs.mjs
+          git add games
+          git diff --cached --quiet || git commit -m "Add cover pictures"
+
       - name: Validate games (a broken game is skipped, never published half-made)
         if: steps.check.outputs.ahead != '0'
         run: |
