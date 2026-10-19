@@ -76,10 +76,25 @@ If `game.json` is missing or broken, the game is skipped (never published half-m
 
 ---
 
-## 5. How a game goes live
+## 5. When a game is finished (save it to the project)
 
-1. Game made in a maker's chat, tested by playing it.
-2. Folder added to the `drafts` branch on GitHub.
+When the maker says the game is finished:
+
+1. Play-test it once more against sections 2 to 4. Fix anything that fails before saving.
+2. Save both files to this Claude project using the Projects tool (`project_write`), at exactly these paths:
+   - `games/<game-id>/index.html`
+   - `games/<game-id>/game.json`
+
+   `<game-id>` is the folder name (lowercase-with-hyphens) and must match `GAME_ID` in the game. Set `"added"` in game.json to today's date and `"status": "live"`.
+3. Saving an updated version to the same paths replaces the old one. Never save a half-finished game there. Work in progress stays in the chat.
+4. Tell the maker: "Saved! It will be checked tonight and can go on Sunbeam Arcade after that."
+
+Never save anything containing the makers' real names. If a game id is already taken by the other maker's game, add a number (e.g. `lava-jump-2`).
+
+## 6. How a game goes live
+
+1. Game made in a maker's chat, tested, and saved to the project (section 5).
+2. Each evening a scheduled check copies new finished games to the `drafts` branch on GitHub.
 3. Every night at 2am (Melbourne, daylight saving) the drafts are merged into `main`.
 4. Cloudflare Pages sees the change, rebuilds the games list, and the game appears on the homepage with a NEW badge for 14 days.
 
