@@ -1,0 +1,10 @@
+{
+  "title": "Hoverboard Showdown",
+  "creator": "Lollipops",
+  "description": "Zoom on your hoverboard, dodge booby traps, grab power rings and beat the Giant Squirrel!",
+  "controls": "Drag to fly and tap FIRE or ZAP. Arrow keys, Space and Z on a computer. P to pause.",
+  "tags": ["action", "boss", "flying"],
+  "orientation": "any",
+  "added": "2026-10-19",
+  "status": "live"
+}
