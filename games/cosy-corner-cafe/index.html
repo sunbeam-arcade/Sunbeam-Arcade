@@ -1,0 +1,1287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Cosy Corner Cafe</title>
+<!--
+  Sunbeam Arcade game by Sunshine.
+  Rules every game follows (full list in GAME-RULES.md):
+   - One self-contained file. No outside scripts, fonts, images or network calls.
+   - Works with touch AND keyboard. Fills any screen size.
+   - Pauses when the tab is hidden. Has a mute button. No sound until the player taps.
+   - No links out of the game except the "Arcade" back button (switched off for portal builds).
+   - No ads, chat, sign-ups or personal data.
+-->
+<style>
+  :root { --bg:#3b2a20; --ink:#fff; --accent:#ffb020; --ui:#00000055; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif; overflow:hidden;
+    touch-action:none; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent; }
+  canvas { display:block; width:100vw; height:100vh; height:100dvh; }
+  .hud { position:fixed; top:0; left:0; right:0; display:flex; justify-content:space-between; align-items:center;
+    padding:max(10px, env(safe-area-inset-top)) 12px 10px; pointer-events:none; font-weight:800; font-size:20px;
+    text-shadow:0 2px 0 #0006; }
+  .hud .btns { display:flex; gap:8px; pointer-events:auto; }
+  .btn.off { opacity:.45; text-decoration:line-through; }
+  .btn { font:inherit; font-size:16px; color:var(--ink); background:var(--ui); border:0; border-radius:999px;
+    padding:8px 14px; min-width:48px; min-height:48px; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; }
+  .overlay { position:fixed; inset:0; display:grid; place-items:center; text-align:center; background:#000a; padding:24px; }
+  .overlay[hidden] { display:none; }
+  .panel h1 { margin:0 0 8px; font-size:clamp(32px,8vw,56px); color:var(--accent); }
+  .panel p { margin:6px 0; font-size:18px; opacity:.95; max-width:520px; }
+  .play { font:inherit; font-size:24px; font-weight:800; margin-top:18px; padding:14px 36px; border:0; border-radius:999px;
+    background:var(--accent); color:#3b2a20; cursor:pointer; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="hud">
+  <span>Coins <span id="score">0</span></span>
+  <div class="btns">
+    <button class="btn" id="music" aria-label="Music on or off">🎵</button>
+    <button class="btn" id="mute" aria-label="Sound on or off">🔊</button>
+    <button class="btn" id="pause" aria-label="Pause">⏸</button>
+    <a class="btn" id="home" href="../../">Arcade</a>
+  </div>
+</div>
+
+<div class="overlay" id="menu">
+  <div class="panel">
+    <h1>Cosy Corner Cafe</h1>
+    <p id="goal">Pick today's special, then give every customer the food they ask for!</p>
+    <p>Tap the food, or press the number keys on a computer.</p>
+    <p>Customers walk past the counter, sometimes a few at once. Tap the food they want before they leave!</p>
+    <p>Each customer wants their food wrapped, in a box, or made allergy safe. Pick the right way first! Some customers ask for two things.</p>
+    <p>Make at least 8 customers happy each day to keep your cafe open.</p>
+    <p id="best"></p>
+    <button class="play" id="play">Play</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ===== SETTINGS =====
+  const GAME_ID = 'cosy-corner-cafe'; // must match the folder name (used for saving best score)
+  const PORTAL_BUILD = false;         // true when uploading to CrazyGames / itch.io etc. Hides the Arcade link.
+
+  // ===== SHELL: screen, input, pause, sound, saving. Keep this part in every game. =====
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+  let W = 0, H = 0, DPR = 1;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    cv.width = W * DPR; cv.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  addEventListener('resize', resize); resize();
+
+  if (PORTAL_BUILD) document.getElementById('home').remove();
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(GAME_ID + ':' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(GAME_ID + ':' + k, JSON.stringify(v)); } catch {} }
+  };
+
+  const keys = {};
+  addEventListener('keydown', e => { keys[e.key] = true; if (e.key === ' ' || e.key.startsWith('Arrow')) e.preventDefault(); if (e.key === 'p' || e.key === 'Escape') togglePause(); });
+  addEventListener('keyup', e => { keys[e.key] = false; });
+
+  // Sound: tiny beeps made in code, so no audio files. Only starts after the player taps Play.
+  let audio = null, muted = store.get('muted', false);
+  const muteBtn = document.getElementById('mute');
+  const showMute = () => { muteBtn.textContent = muted ? '🔇' : '🔊'; };
+  showMute();
+  muteBtn.onclick = () => { muted = !muted; store.set('muted', muted); showMute(); musicVol(); };
+  function beep(freq = 600, dur = 0.08, type = 'sine', vol = 0.15, delay = 0) {
+    if (muted || !audio) return;
+    const t0 = audio.currentTime + delay;
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g).connect(audio.destination); o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+
+  let running = false, paused = false;
+  const pauseBtn = document.getElementById('pause');
+  function togglePause(force) {
+    if (!running) return;
+    paused = force !== undefined ? force : !paused;
+    pauseBtn.textContent = paused ? '▶' : '⏸';
+    if (audio) paused ? audio.suspend() : audio.resume();
+  }
+  pauseBtn.onclick = () => togglePause();
+  document.addEventListener('visibilitychange', () => { if (document.hidden) togglePause(true); });
+  addEventListener('blur', () => togglePause(true));
+
+  // ===== THE GAME =====
+  const menu = document.getElementById('menu');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const goalEl = document.getElementById('goal');
+  let best = store.get('best', 0);
+  const showBest = () => { bestEl.textContent = best ? 'Best: ' + best + ' coins' : ''; };
+  showBest();
+
+  const FOOD = {
+    pretzel: { name: 'Pretzel',   base: 4 },
+    pizza:   { name: 'Pizza',     base: 6 },
+    shake:   { name: 'Milkshake', base: 5 },
+    bacon:   { name: 'Bacon',     base: 3 },
+    icecream:{ name: 'Ice Cream', base: 5 },
+    banana:  { name: 'Banana Bread', base: 4 },
+    fruit:   { name: 'Fruit Platter', base: 7 },
+  };
+  const ALL_FOOD = Object.keys(FOOD);
+  const PER_DAY = 15;          // the day ends after 15 customers
+  const GOAL = 8;              // make at least 8 customers happy to keep the cafe open
+  const KIND_EVERY = 20;       // every 20th customer is a lady who can't pay
+  const SPECIAL_CHANCE = 0.25; // only about 1 in 4 customers wants the special
+  // How each customer wants their food made.
+  const STYLES = {
+    wrap:    { name: 'Wrapped',      say: 'wrapped' },
+    box:     { name: 'In a box',     say: 'in a box' },
+    allergy: { name: 'Allergy safe', say: 'allergy safe' },
+  };
+  const STYLE_LIST = Object.keys(STYLES);
+  const STYLE_KEYS = ['q', 'w', 'e'];   // keyboard keys for the three ways
+  let style = 'wrap';                   // the way the player has picked right now
+
+  // Looks for the people, so every customer is different.
+  const SKINS   = ['#f6d6bd', '#efc4a1', '#e2ad86', '#c98e62', '#a8714a', '#8a5a3a', '#6b432b', '#f1cba8', '#d79f75'];
+  const HAIRS   = ['#1f1611', '#3b2416', '#5a3620', '#7a4a26', '#a8672e', '#d8b06a', '#151515', '#9b3f1e', '#6e6e6e'];
+  const EYES    = ['#4a2e18', '#2b1d14', '#3b6ea8', '#4f7d3a', '#6b4a2a'];
+  const TOPS    = ['#e05a6e', '#3f8fd0', '#4fb37f', '#8e63c9', '#ef8f2f', '#2a9d8f', '#f2f2f2', '#2f3e52', '#c94848', '#f0c94c', '#7f8c8d', '#e6a1b5'];
+  const BOTTOMS = ['#2f4a7a', '#3a5f94', '#33333d', '#7a6a4f', '#4d5e36', '#222222', '#6a5a8a', '#8b5e3c'];
+  const SHOES   = ['#222222', '#5a3620', '#f4f4f4', '#b03a2e', '#2f3e52', '#8a5a2b', '#dddddd'];
+  const BAGS    = ['#7a4a26', '#2f3e52', '#b03a2e', '#3a6b4f', '#222222', '#c78d3a'];
+  const HAPPY_WORDS = ['Yum!', 'Thank you!', 'Perfect!', 'Delicious!', 'Just right!', 'Looks great!'];
+  const SAD_WORDS = ['Wrong food!', "That's not mine!", 'I wanted something else!'];
+
+  const choice = a => a[Math.floor(Math.random() * a.length)];
+  const rand = (a, b) => a + Math.random() * (b - a);
+  function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+  // ----- difficulty: every day is a tiny bit harder -----
+  // Seconds a customer takes to walk all the way across. 7 seconds on day 1, then 8% faster each day.
+  const crossTime = d => 7;   // always the same as day 1
+  // Time until the next customer comes in. Random, so sometimes a few people are in view at once.
+  // More people ask for two things as the days go on (about 1 in 5 on day 1, up to half).
+  const twoChance = () => Math.min(0.5, 0.2 + (day - 1) * 0.05);
+  function nextGap() {
+    const t = crossTime(day);
+    if (Math.random() < 0.25) return rand(0.9, 1.6);          // a little group arriving together
+    return rand(Math.max(1.0, t * 0.25), t * 0.8);
+  }
+
+  let state = 'title';      // title, pick, serve, dayEnd
+  let day = 1, coins = 0, totalCustomers = 0, kindness = 0;
+  let spawned = 0, resolved = 0, dayCoins = 0, dayHappy = 0, screenT = 0, spawnT = 0;
+  let todays = [], special = null, people = [], pops = [];
+
+  function newDayMenu() {
+    // All the foods, in a new order, with prices that change a little each day.
+    todays = shuffle(ALL_FOOD.slice()).map(t => ({
+      type: t, price: Math.max(2, FOOD[t].base + Math.floor(Math.random() * 3) - 1)
+    }));
+    special = null; people = []; state = 'pick'; screenT = 0;
+  }
+
+  function start() {
+    if (!audio) { try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch {} }
+    day = 1; coins = 0; totalCustomers = 0; kindness = 0; pops = [];
+    scoreEl.textContent = 0;
+    newDayMenu();
+    menu.hidden = true; running = true; togglePause(false);
+    beep(660, 0.1); beep(880, 0.12, 'sine', 0.15, 0.1);
+    startMusic();
+  }
+
+  // ===== POP MUSIC =====
+  // An original pop song made with code (no music files). Drums, bass, bouncy chords and a tune.
+  // It loops every 8 bars and gets a little faster each day.
+  let music = null, musicOn = store.get('music', true);
+  const musicBtn = document.getElementById('music');
+  const showMusic = () => { musicBtn.classList.toggle('off', !musicOn); };
+  showMusic();
+  musicBtn.onclick = () => { musicOn = !musicOn; store.set('music', musicOn); showMusic(); musicVol(); };
+  function musicVol() {
+    if (!music) return;
+    music.out.gain.setTargetAtTime(muted || !musicOn ? 0 : 0.5, audio.currentTime, 0.08);
+  }
+
+  const midi = m => 440 * Math.pow(2, (m - 69) / 12);
+  // Chords: C, G, A minor, F (a happy pop sound). Bass notes and chord notes for each bar.
+  const BASS   = [36, 43, 45, 41];
+  const CHORDS = [[60, 64, 67], [59, 62, 67], [57, 60, 64], [57, 60, 65]];
+  // The tune: 8 bars, 8 notes per bar. 0 = rest, -1 = keep holding the last note.
+  const TUNE = [
+    [76, -1, 79, 76, 81, -1, 79, 0],
+    [79, -1, 74, -1, 71, 74, 79, 0],
+    [76, -1, 72, 76, 81, -1, 84, -1],
+    [81, 79, 77, -1, 76, -1, 0, 0],
+    [72, 74, 76, -1, 79, -1, 76, 74],
+    [74, -1, 71, -1, 74, 76, 79, -1],
+    [81, -1, 79, 76, 72, -1, 76, -1],
+    [77, 76, 74, -1, 72, -1, 0, 0],
+  ];
+
+  function startMusic() {
+    if (!audio || music) { musicVol(); return; }
+    const out = audio.createGain(); out.gain.value = 0; out.connect(audio.destination);
+    // a little bit of white noise for the drums
+    const len = audio.sampleRate * 0.5, buf = audio.createBuffer(1, len, audio.sampleRate);
+    const d = buf.getChannelData(0); for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    music = { out, noise: buf, step: 0, loop: 0, next: audio.currentTime + 0.1 };
+    music.timer = setInterval(scheduleMusic, 25);
+    musicVol();
+  }
+  function stopMusic() {
+    if (!music) return;
+    clearInterval(music.timer);
+    const m = music; music = null;
+    m.out.gain.setTargetAtTime(0, audio.currentTime, 0.2);
+    setTimeout(() => m.out.disconnect(), 1500);
+  }
+
+  function tone(freq, t, dur, type, vol, cutoff) {
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    let node = o;
+    if (cutoff) { const f = audio.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = cutoff; o.connect(f); node = f; }
+    node.connect(g).connect(music.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+  function hit(t, dur, vol, hp) {
+    const s = audio.createBufferSource(), f = audio.createBiquadFilter(), g = audio.createGain();
+    s.buffer = music.noise; f.type = 'highpass'; f.frequency.value = hp;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(f).connect(g).connect(music.out); s.start(t); s.stop(t + dur + 0.02);
+  }
+  function kick(t) {
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+    g.gain.setValueAtTime(0.7, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+    o.connect(g).connect(music.out); o.start(t); o.stop(t + 0.25);
+  }
+
+  function playStep(s, t, sd) {
+    const bar = Math.floor(s / 16), pos = s % 16, ch = bar % 4;
+    // drums: kick on every beat, clap on beats 2 and 4, hi-hats in between
+    if (pos % 4 === 0) kick(t);
+    if (pos === 4 || pos === 12) { hit(t, 0.14, 0.3, 1400); tone(190, t, 0.08, 'triangle', 0.12); }
+    if (pos % 4 === 2) hit(t, 0.06, 0.12, 7000);
+    else if (pos % 2 === 1) hit(t, 0.025, 0.05, 8000);
+    // bass bounces between low and high notes
+    if (pos % 2 === 0) {
+      const n = BASS[ch] + (pos % 4 === 2 ? 12 : 0);
+      tone(midi(n), t, sd * 1.7, 'sawtooth', 0.16, 700);
+    }
+    // bouncy chords on the off-beats
+    if (pos % 4 === 2) for (const n of CHORDS[ch]) { tone(midi(n), t, 0.14, 'sawtooth', 0.035, 2400); tone(midi(n) * 1.005, t, 0.14, 'square', 0.02, 2400); }
+    // the tune (every third time round, a twinkly pattern plays instead)
+    if (music.loop % 3 !== 2) {
+      if (pos % 2 === 0) {
+        const row = TUNE[bar], i = pos / 2, n = row[i];
+        if (n > 0) {
+          let len = 1; while (i + len < 8 && row[i + len] === -1) len++;
+          tone(midi(n), t, sd * 2 * len * 0.95, 'square', 0.07, 3200);
+          tone(midi(n + 12), t, sd * 2 * len * 0.6, 'triangle', 0.025);
+        }
+      }
+    } else {
+      const notes = CHORDS[ch];
+      tone(midi(notes[[0, 1, 2, 1][pos % 4]] + 12), t, sd * 0.9, 'triangle', 0.05);
+    }
+  }
+
+  function scheduleMusic() {
+    if (!music || !audio || audio.state !== 'running') return;
+    const bpm = 112;
+    const sd = 60 / bpm / 4;                            // length of one sixteenth note
+    if (music.next < audio.currentTime - 0.05) music.next = audio.currentTime + 0.05;   // catch up after a pause
+    while (music.next < audio.currentTime + 0.12) {
+      playStep(music.step, music.next, sd);
+      music.next += sd;
+      music.step = (music.step + 1) % 128;
+      if (music.step === 0) music.loop++;
+    }
+  }
+  document.getElementById('play').onclick = start;
+
+  function chooseSpecial(i) {
+    if (!todays[i]) return;
+    special = todays[i].type;
+    spawned = 0; resolved = 0; dayCoins = 0; dayHappy = 0; spawnT = 0.4; people = [];
+    state = 'serve';
+    beep(523, 0.1); beep(659, 0.1, 'sine', 0.15, 0.1); beep(784, 0.16, 'sine', 0.15, 0.2);
+  }
+
+  function makeLook(kind) {
+    if (kind) return {
+      skin: choice(SKINS), hair: '#d9d5cf', hairStyle: 'bun', eyes: choice(EYES),
+      top: '#8a7a6c', topStyle: 'shawl', bottom: '#5b4a6b', legs: 'longskirt', shoes: '#3a2a20',
+      glasses: true, beard: false, bag: null, scale: 0.93, headScale: 1, lean: 0.13, kid: false
+    };
+    const kid = Math.random() < 0.15;
+    const fem = Math.random() < 0.5;
+    const legs = fem ? choice(['pants', 'pants', 'skirt', 'dress', 'shorts']) : choice(['pants', 'pants', 'pants', 'shorts']);
+    const hairStyle = fem ? choice(['long', 'long', 'ponytail', 'bun', 'curly', 'short'])
+                          : choice(['short', 'short', 'buzz', 'curly', 'bald', 'short']);
+    return {
+      skin: choice(SKINS), hair: choice(HAIRS), hairStyle: kid && hairStyle === 'bald' ? 'short' : hairStyle, eyes: choice(EYES),
+      top: choice(TOPS), topStyle: legs === 'dress' ? 'dress' : choice(['tee', 'tee', 'hoodie', 'collar', 'jacket', 'long']),
+      inner: choice(['#f2f2f2', '#2f3e52', '#e05a6e', '#f0c94c']),
+      bottom: choice(BOTTOMS), legs, shoes: choice(SHOES),
+      glasses: !kid && Math.random() < 0.22, beard: !kid && !fem && Math.random() < 0.3,
+      bag: kid ? (Math.random() < 0.7 ? 'backpack' : null) : choice([null, null, 'backpack', 'handbag']),
+      bagColor: choice(BAGS),
+      scale: kid ? rand(0.64, 0.72) : rand(0.9, 1.06), headScale: kid ? 1.22 : 1, lean: 0.03, kid
+    };
+  }
+
+  function spawnCustomer() {
+    totalCustomers++; spawned++;
+    const kind = totalCustomers % KIND_EVERY === 0;
+    // Most people want something different from the special. Some ask for two things.
+    let wants = null;
+    if (!kind) {
+      wants = [Math.random() < SPECIAL_CHANCE ? special : choice(todays.filter(t => t.type !== special)).type];
+      if (Math.random() < twoChance()) {
+        let b; do { b = choice(todays).type; } while (b === wants[0]);
+        wants.push(b);
+      }
+    }
+    const L = layout();
+    const p = {
+      kind, look: makeLook(kind), wants, got: wants ? wants.map(() => false) : null, want: wants && wants[0],
+      style: kind ? null : choice(STYLE_LIST), holdStyle: null,
+      x: -L.r * 2, phase: Math.random() * 6, status: 'wait', mood: 'walk', say: '', sayT: 0, holding: null, speedMul: 1
+    };
+    if (kind) {
+      p.say = "I can't pay today. Could I please have some food?";
+      beep(440, 0.15, 'triangle', 0.12); beep(550, 0.2, 'triangle', 0.12, 0.15);
+    }
+    people.push(p);
+  }
+
+  function addPop(text, color, x) {
+    const L = layout();
+    // shows on the floor by the customer's feet, so it doesn't cover the speech bubbles
+    pops.push({ text, color, x: Math.max(70, Math.min(W - 70, x)), y: L.floorY - L.r * 0.3, t: 0 });
+  }
+
+  // Customer is done: they walk off (faster), and their spot in the day is used up.
+  function finish(p, mood, say) {
+    p.status = 'done'; p.mood = mood; p.say = say; p.sayT = 0;
+    p.speedMul = mood === 'happy' ? 1.5 : 1.8;
+    resolved++;
+  }
+
+  function serve(i) {
+    const L = layout();
+    if (state !== 'serve') return;
+    const item = todays[i];
+    if (!item) return;
+    // Customers who can be served, the one closest to leaving first.
+    const waiting = people.filter(p => p.status === 'wait' && p.x > L.r * 0.3 && p.x < W + L.r).sort((a, b) => b.x - a.x);
+    if (!waiting.length) return;
+    // The food goes to someone who asked for that food made that way.
+    // If nobody did, the lady happily takes it. Next best: someone who wanted that food
+    // (but made a different way). Otherwise the customer at the front gets the wrong food.
+    const needs = (p, f) => p.wants && p.wants.some((w, k) => w === f && !p.got[k]);
+    const exact = waiting.find(p => needs(p, item.type) && p.style === style);
+    const target = exact || waiting.find(p => p.kind);
+    if (target && target.kind) {
+      kindness++; coins += 10; dayCoins += 10; dayHappy++;
+      target.holding = item.type; target.holdStyle = style;
+      finish(target, 'happy', 'Thank you, that is so kind!');
+      addPop('Kindness +10', '#ff7aa8', target.x);
+      beep(784, 0.12); beep(988, 0.12, 'sine', 0.15, 0.12); beep(1175, 0.2, 'sine', 0.15, 0.24);
+    } else if (target) {
+      // Faster service = bigger tip (up to 3 coins).
+      const progress = Math.max(0, Math.min(1, (target.x + L.r * 2) / (W + L.r * 4)));
+      const tip = Math.round(3 * (1 - progress));
+      const pay = item.price * (item.type === special ? 2 : 1) + tip;
+      coins += pay; dayCoins += pay;
+      target.got[target.wants.findIndex((w, k) => w === item.type && !target.got[k])] = true;
+      if (!target.holding) { target.holding = item.type; target.holdStyle = style; }
+      addPop('+' + pay + ' coins', '#ffd447', target.x);
+      if (target.got.every(Boolean)) {
+        // they have everything they asked for
+        dayHappy++;
+        finish(target, 'happy', choice(HAPPY_WORDS));
+        beep(880, 0.08); beep(1320, 0.12, 'sine', 0.15, 0.08);
+      } else {
+        beep(880, 0.08);   // one down, one to go
+      }
+    } else {
+      const sameFood = waiting.find(p => needs(p, item.type));
+      if (sameFood) {
+        // right food, made the wrong way
+        const why = sameFood.style === 'allergy' ? "I'm allergic! It had to be allergy safe."
+                  : 'I wanted it ' + STYLES[sameFood.style].say + '!';
+        finish(sameFood, 'sad', why);
+        addPop('Wrong way', '#ffffff', sameFood.x);
+      } else {
+        const front = waiting[0];
+        finish(front, 'sad', choice(SAD_WORDS));
+        addPop('Wrong food', '#ffffff', front.x);
+      }
+      beep(160, 0.2, 'square', 0.08);
+    }
+    scoreEl.textContent = coins;
+  }
+
+  function pickStyle(s) {
+    if (style === s) return;
+    style = s;
+    beep(660, 0.05, 'triangle', 0.1);
+  }
+
+  function endDay() {
+    people = [];
+    if (dayHappy < GOAL) return gameOver();
+    state = 'dayEnd'; screenT = 0;
+    beep(523, 0.12); beep(659, 0.12, 'sine', 0.15, 0.12); beep(784, 0.12, 'sine', 0.15, 0.24); beep(1047, 0.25, 'sine', 0.15, 0.36);
+  }
+
+  function nextDay() {
+    if (state !== 'dayEnd' || screenT < 0.6) return;
+    day++;
+    newDayMenu();
+  }
+
+  function gameOver() {
+    running = false; state = 'title'; people = []; pops = [];
+    stopMusic();
+    beep(300, 0.2, 'triangle'); beep(200, 0.4, 'triangle', 0.15, 0.2);
+    if (coins > best) { best = coins; store.set('best', best); }
+    showBest();
+    menu.querySelector('h1').textContent = 'Cafe closed!';
+    goalEl.textContent = 'Only ' + dayHappy + ' happy customers on day ' + day + '. You needed ' + GOAL + '. ' +
+      'You earned ' + coins + ' coins' +
+      (kindness ? ' and helped ' + kindness + (kindness === 1 ? ' person' : ' people') + ' for free.' : '.');
+    menu.querySelector('.play').textContent = 'Play again';
+    menu.hidden = false;
+  }
+
+  // ----- input -----
+  cv.addEventListener('pointerdown', e => {
+    if (!running || paused) return;
+    const x = e.clientX, y = e.clientY;
+    if (state === 'pick') {
+      cardRects().rects.forEach((r, i) => { if (inside(x, y, r)) chooseSpecial(i); });
+    } else if (state === 'serve') {
+      const L = layout();
+      L.styleBtns.forEach((r, i) => { if (inside(x, y, r)) pickStyle(STYLE_LIST[i]); });
+      L.btns.forEach((r, i) => { if (inside(x, y, r)) serve(i); });
+    } else if (state === 'dayEnd') {
+      nextDay();
+    }
+  });
+  addEventListener('keydown', e => {
+    if (!running || paused) return;
+    const sk = STYLE_KEYS.indexOf(e.key.toLowerCase());
+    if (state === 'serve' && sk >= 0) pickStyle(STYLE_LIST[sk]);
+    const n = ['1', '2', '3', '4', '5', '6', '7'].indexOf(e.key);
+    if (state === 'pick' && n >= 0) chooseSpecial(n);
+    else if (state === 'serve' && n >= 0) serve(n);
+    else if (state === 'dayEnd' && (e.key === ' ' || e.key === 'Enter')) nextDay();
+  });
+  const inside = (x, y, r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+
+  // ----- layout (worked out fresh every frame so it fits any screen) -----
+  // Lays out n boxes in a grid: one row on wide screens, two rows on narrow ones.
+  function grid(n, ax, ay, aw, ah, maxW, aspect) {
+    const cols = n <= 3 || aw >= 760 ? n : Math.ceil(n / 2);
+    const rows = Math.ceil(n / cols);
+    const gap = Math.max(8, Math.min(22, aw * 0.022));
+    let w = Math.min(maxW, (aw - gap * (cols + 1)) / cols);
+    let h = w * aspect;
+    const maxH = (ah - gap * (rows - 1)) / rows;
+    if (h > maxH) { h = maxH; w = Math.min(w, h / aspect * 1.15); }
+    const gw = cols * w + (cols - 1) * gap, gh = rows * h + (rows - 1) * gap;
+    const x0 = ax + (aw - gw) / 2, y0 = ay + (ah - gh) / 2;
+    const rects = [];
+    for (let i = 0; i < n; i++) {
+      const row = Math.floor(i / cols), col = i % cols;
+      const inRow = Math.min(cols, n - row * cols);
+      const rowX = x0 + (cols - inRow) * (w + gap) / 2; // centre a short last row
+      rects.push({ x: rowX + col * (w + gap), y: y0 + row * (h + gap), w, h });
+    }
+    return { rects, top: y0 };
+  }
+  function layout() {
+    const counterY = Math.round(H * 0.62);
+    const floorY = counterY - 10;               // where the customers' feet are
+    const bh = 52;                              // speech bubble height
+    // hp = how tall a grown-up is. A speech bubble (up to 3 lines) fits above their head.
+    const hp = Math.max(100, Math.min(330, floorY - 136 - 74 - 16));
+    const r = hp / 7.3;                         // handy spacing unit (about one head)
+    // row of "how to make it" buttons, then the food buttons
+    const sw = Math.min(170, (W - 32) / 3), sh = 48, sy = counterY + 28;
+    const sx0 = (W - sw * 3 - 16) / 2;
+    const styleBtns = STYLE_LIST.map((_, i) => ({ x: sx0 + i * (sw + 8), y: sy, w: sw, h: sh }));
+    const top = sy + sh + 6, bottom = H - Math.max(10, H * 0.02);
+    const btns = grid(todays.length || 7, 0, top, W, bottom - top, 160, 1.05).rects;
+    return { counterY, floorY, hp, r, bh, btns, styleBtns };
+  }
+  function cardRects() {
+    const top = 175, bottom = H - 20;
+    return grid(todays.length, 0, top, W, bottom - top, 190, 1.25);
+  }
+
+  // ----- update -----
+  function update(dt) {
+    for (const p of pops) { p.t += dt; p.y -= 45 * dt; }
+    pops = pops.filter(p => p.t < 1.3);
+    if (state !== 'serve') { screenT += dt; return; }
+    const L = layout();
+    const speed = (W + L.r * 4) / crossTime(day);
+    for (const p of people) {
+      const s = speed * p.speedMul;
+      p.x += s * dt;
+      // one full walking cycle (two steps) covers about 0.7 of a person's height
+      p.phase += s * dt * Math.PI * 2 / (L.hp * p.look.scale * (p.kind ? 0.5 : 0.72));
+      p.sayT += dt;
+      if (p.status === 'wait' && p.x > W + L.r * 1.6) {
+        // walked all the way past without getting food
+        p.status = 'gone'; resolved++;
+        addPop('Missed!', '#ffffff', W - 70);
+        beep(220, 0.18, 'triangle', 0.1); beep(165, 0.25, 'triangle', 0.1, 0.15);
+      }
+    }
+    people = people.filter(p => p.x < W + L.r * 3);
+    // new customers arrive at random times, but never on top of the last one
+    spawnT -= dt;
+    if (spawned < PER_DAY && spawnT <= 0) {
+      // leave room so speech bubbles don't cover each other
+      const last = people.filter(p => p.status === 'wait' || p.x < L.r * 3).reduce((m, p) => Math.min(m, p.x), Infinity);
+      if (last > Math.max(L.r * 2.4, 200)) { spawnCustomer(); spawnT = nextGap(); }
+    }
+    if (spawned >= PER_DAY && resolved >= PER_DAY && !people.length) endDay();
+  }
+
+  // ----- drawing helpers -----
+  function font(px, bold = true) { ctx.font = (bold ? 'bold ' : '') + Math.round(px) + 'px "Trebuchet MS","Segoe UI",system-ui,sans-serif'; }
+  // Picks the biggest font size (up to px) that lets the text fit in maxW.
+  function fitFont(text, px, maxW, bold = true, min = 10) {
+    let s = px; font(s, bold);
+    while (s > min && ctx.measureText(text).width > maxW) { s -= 1; font(s, bold); }
+    return s;
+  }
+  function wrapLines(text, maxW) {
+    const words = text.split(' '); const lines = []; let line = '';
+    for (const w of words) {
+      const t = line ? line + ' ' + w : w;
+      if (ctx.measureText(t).width > maxW && line) { lines.push(line); line = w; } else line = t;
+    }
+    lines.push(line);
+    return lines;
+  }
+  function star(x, y, r, color) {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * 0.45 : r;
+      ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    ctx.closePath(); ctx.fillStyle = color; ctx.fill();
+  }
+  // Makes a colour darker (f < 0) or lighter (f > 0).
+  function shade(hex, f) {
+    const n = parseInt(hex.slice(1), 16);
+    const t = f < 0 ? 0 : 255, p = Math.abs(f);
+    const c = [n >> 16, (n >> 8) & 255, n & 255].map(v => Math.round((t - v) * p + v));
+    return 'rgb(' + c.join(',') + ')';
+  }
+
+  function drawFood(type, x, y, s) {
+    ctx.save(); ctx.translate(x, y); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    if (type === 'pretzel') {
+      const path = () => {
+        ctx.beginPath(); ctx.arc(-s * 0.36, -s * 0.15, s * 0.4, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(s * 0.36, -s * 0.15, s * 0.4, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(0, -s * 0.4, s * 0.92, 0.2 * Math.PI, 0.8 * Math.PI); ctx.stroke();
+      };
+      ctx.strokeStyle = '#7a3f12'; ctx.lineWidth = s * 0.3; path();
+      ctx.strokeStyle = '#c47a35'; ctx.lineWidth = s * 0.17; path();
+      ctx.fillStyle = '#fff';
+      [[-0.6, -0.35], [0.55, -0.45], [-0.2, 0.35], [0.3, 0.3], [0, -0.5]].forEach(([a, b]) => ctx.fillRect(a * s, b * s, s * 0.08, s * 0.08));
+    } else if (type === 'pizza') {
+      ctx.fillStyle = '#ffd35c'; ctx.strokeStyle = '#d9962f'; ctx.lineWidth = s * 0.06;
+      ctx.beginPath(); ctx.moveTo(0, s * 0.95); ctx.lineTo(-s * 0.75, -s * 0.55); ctx.lineTo(s * 0.75, -s * 0.55); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#c9822f'; ctx.beginPath(); ctx.roundRect(-s * 0.88, -s * 0.82, s * 1.76, s * 0.34, s * 0.17); ctx.fill();
+      ctx.fillStyle = '#d33a2c';
+      [[-0.28, -0.22], [0.27, -0.2], [0, 0.3]].forEach(([a, b]) => { ctx.beginPath(); ctx.arc(a * s, b * s, s * 0.15, 0, Math.PI * 2); ctx.fill(); });
+    } else if (type === 'shake') {
+      ctx.strokeStyle = '#3fb7f0'; ctx.lineWidth = s * 0.1;
+      ctx.beginPath(); ctx.moveTo(s * 0.1, -s * 0.4); ctx.lineTo(s * 0.4, -s * 1.0); ctx.stroke();
+      ctx.fillStyle = '#ff8fbf'; ctx.strokeStyle = '#d0457f'; ctx.lineWidth = s * 0.06;
+      ctx.beginPath(); ctx.moveTo(-s * 0.5, -s * 0.35); ctx.lineTo(s * 0.5, -s * 0.35); ctx.lineTo(s * 0.35, s * 0.92); ctx.lineTo(-s * 0.35, s * 0.92); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      [-0.3, 0, 0.3].forEach(a => { ctx.beginPath(); ctx.arc(a * s, -s * 0.42, s * 0.24, 0, Math.PI * 2); ctx.fill(); });
+      ctx.fillStyle = '#d6202f'; ctx.beginPath(); ctx.arc(-s * 0.05, -s * 0.72, s * 0.14, 0, Math.PI * 2); ctx.fill();
+    } else if (type === 'bacon') {
+      const strip = (oy, c1, c2) => {
+        const wave = () => { ctx.beginPath(); for (let i = 0; i <= 20; i++) { const t = i / 20; const px = (-0.85 + 1.7 * t) * s, py = oy * s + Math.sin(t * Math.PI * 3) * s * 0.13; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); } ctx.stroke(); };
+        ctx.strokeStyle = c1; ctx.lineWidth = s * 0.34; wave();
+        ctx.strokeStyle = c2; ctx.lineWidth = s * 0.1; wave();
+      };
+      strip(-0.3, '#a8321f', '#f7c2ad');
+      strip(0.35, '#b53d26', '#f7c2ad');
+    } else if (type === 'icecream') {
+      // cone with criss-cross lines
+      ctx.fillStyle = '#e9b26a'; ctx.strokeStyle = '#b07a35'; ctx.lineWidth = s * 0.06;
+      ctx.beginPath(); ctx.moveTo(-s * 0.48, -s * 0.05); ctx.lineTo(s * 0.48, -s * 0.05); ctx.lineTo(0, s * 1.0); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.save(); ctx.clip();
+      ctx.lineWidth = s * 0.04;
+      for (let k = -3; k <= 3; k++) {
+        ctx.beginPath(); ctx.moveTo(k * s * 0.25 - s * 0.6, -s * 0.05); ctx.lineTo(k * s * 0.25 + s * 0.4, s * 1.0); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(k * s * 0.25 + s * 0.6, -s * 0.05); ctx.lineTo(k * s * 0.25 - s * 0.4, s * 1.0); ctx.stroke();
+      }
+      ctx.restore();
+      // two scoops
+      ctx.fillStyle = '#ffb3cf'; ctx.beginPath(); ctx.arc(-s * 0.2, -s * 0.22, s * 0.36, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff3d6'; ctx.beginPath(); ctx.arc(s * 0.22, -s * 0.22, s * 0.36, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#8a4b2a'; ctx.beginPath(); ctx.arc(0, -s * 0.62, s * 0.36, 0, Math.PI * 2); ctx.fill();
+      // sprinkles
+      const sp = ['#ff5a5a', '#4ab0ff', '#ffd23f', '#5cd65c'];
+      [[-0.15, -0.75], [0.12, -0.55], [-0.05, -0.85], [0.2, -0.78]].forEach(([a, b], k) => { ctx.fillStyle = sp[k]; ctx.fillRect(a * s, b * s, s * 0.1, s * 0.05); });
+    } else if (type === 'banana') {
+      // a slice of loaf with a banana on top
+      ctx.fillStyle = '#8a5428'; ctx.beginPath(); ctx.roundRect(-s * 0.8, -s * 0.35, s * 1.6, s * 1.1, s * 0.25); ctx.fill();
+      ctx.fillStyle = '#d9a35e'; ctx.beginPath(); ctx.roundRect(-s * 0.68, -s * 0.2, s * 1.36, s * 0.85, s * 0.15); ctx.fill();
+      ctx.fillStyle = '#6b3d1c';
+      [[-0.4, 0.05], [0.1, 0.25], [0.4, -0.02], [-0.15, 0.45], [0.35, 0.45]].forEach(([a, b]) => { ctx.beginPath(); ctx.arc(a * s, b * s, s * 0.06, 0, Math.PI * 2); ctx.fill(); });
+      ctx.strokeStyle = '#ffd93b'; ctx.lineWidth = s * 0.22;
+      ctx.beginPath(); ctx.arc(0, -s * 1.15, s * 0.7, 0.25 * Math.PI, 0.75 * Math.PI); ctx.stroke();
+      ctx.fillStyle = '#5a3a1a';
+      ctx.beginPath(); ctx.arc(Math.cos(0.25 * Math.PI) * s * 0.7, -s * 1.15 + Math.sin(0.25 * Math.PI) * s * 0.7, s * 0.07, 0, Math.PI * 2); ctx.fill();
+    } else if (type === 'fruit') {
+      // plate
+      ctx.fillStyle = '#e8eef5'; ctx.beginPath(); ctx.ellipse(0, s * 0.35, s * 0.98, s * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#a9b8c8'; ctx.lineWidth = s * 0.05; ctx.stroke();
+      // orange slice
+      ctx.fillStyle = '#ff9f1c'; ctx.beginPath(); ctx.arc(-s * 0.45, s * 0.15, s * 0.32, Math.PI, 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ffd08a'; ctx.beginPath(); ctx.arc(-s * 0.45, s * 0.15, s * 0.22, Math.PI, 0); ctx.closePath(); ctx.fill();
+      // kiwi
+      ctx.fillStyle = '#7a5a2e'; ctx.beginPath(); ctx.arc(s * 0.05, s * 0.3, s * 0.3, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#8fd14f'; ctx.beginPath(); ctx.arc(s * 0.05, s * 0.3, s * 0.25, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#f4f9e0'; ctx.beginPath(); ctx.arc(s * 0.05, s * 0.3, s * 0.08, 0, Math.PI * 2); ctx.fill();
+      // strawberry
+      ctx.fillStyle = '#e8283c'; ctx.beginPath(); ctx.moveTo(s * 0.35, -s * 0.05); ctx.quadraticCurveTo(s * 0.95, -s * 0.1, s * 0.6, s * 0.5); ctx.quadraticCurveTo(s * 0.25, -s * 0.1, s * 0.35, -s * 0.05); ctx.fill();
+      ctx.fillStyle = '#3fa34d'; ctx.beginPath(); ctx.ellipse(s * 0.58, -s * 0.1, s * 0.2, s * 0.07, 0, 0, Math.PI * 2); ctx.fill();
+      // grapes
+      ctx.fillStyle = '#8e44ad';
+      [[-0.15, -0.15], [-0.02, -0.12], [-0.09, -0.02], [-0.22, -0.03]].forEach(([a, b]) => { ctx.beginPath(); ctx.arc(a * s, b * s, s * 0.1, 0, Math.PI * 2); ctx.fill(); });
+    }
+    ctx.restore();
+  }
+
+  // ----- people -----
+  // A body part that is thicker at one end (like a thigh or an arm), with rounded ends.
+  function limb(x1, y1, x2, y2, w1, w2, col) {
+    const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len, ny = dx / len;
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(x1 + nx * w1 / 2, y1 + ny * w1 / 2);
+    ctx.lineTo(x2 + nx * w2 / 2, y2 + ny * w2 / 2);
+    ctx.lineTo(x2 - nx * w2 / 2, y2 - ny * w2 / 2);
+    ctx.lineTo(x1 - nx * w1 / 2, y1 - ny * w1 / 2);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.arc(x1, y1, w1 / 2, 0, Math.PI * 2); ctx.arc(x2, y2, w2 / 2, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // A person walking to the right, drawn with real body proportions (about 7 heads tall).
+  // Feet on floorY. hp = height of a grown-up. Returns the top of their head.
+  function drawPerson(c, x, floorY, hp) {
+    const lk = c.look, u = hp * lk.scale / 100, ph = c.phase;
+    const amp = c.kind ? 0.26 : 0.4;                 // how big the steps are
+    const back = k => ph + (k ? Math.PI : 0);
+    const darker = (col, k) => k ? shade(col, -0.22) : col;
+
+    // Hips go up and down a little as the legs swing.
+    const hipY = floorY - 4 * u - 46 * u * Math.cos(amp * Math.sin(ph)) * 0.985;
+    const hx = x;
+
+    // soft shadow on the floor
+    ctx.fillStyle = 'rgba(60,30,10,0.16)';
+    ctx.beginPath(); ctx.ellipse(x + 2 * u, floorY + 0.5 * u, 15 * u, 2.4 * u, 0, 0, Math.PI * 2); ctx.fill();
+
+    function leg(k) {
+      const p = back(k);
+      const a = amp * Math.sin(p);
+      const swing = Math.max(0, Math.cos(p));                 // leg moving forward = knee bends
+      const bend = 0.06 + 0.8 * swing * (0.55 - 0.45 * Math.sin(p));
+      const ox = (k ? -1.2 : 1.2) * u;
+      const kx = hx + ox + Math.sin(a) * 23 * u, ky = hipY + Math.cos(a) * 23 * u;
+      const sa = a - bend;
+      let ax = kx + Math.sin(sa) * 23 * u, ay = ky + Math.cos(sa) * 23 * u;
+      ay = Math.min(ay, floorY - 3.4 * u);
+      const pants = lk.legs === 'pants', shorts = lk.legs === 'shorts';
+      const thighCol = pants || shorts ? lk.bottom : lk.skin;
+      const shinCol = pants ? lk.bottom : lk.legs === 'longskirt' ? '#4a3b3b' : lk.skin;
+      limb(hx + ox, hipY, kx, ky, 8.5 * u, 6.2 * u, darker(thighCol, k));
+      limb(kx, ky, ax, ay, 6.2 * u, 4.2 * u, darker(shinCol, k));
+      if (shorts) limb(hx + ox, hipY, kx - Math.sin(a) * 6 * u, ky - Math.cos(a) * 6 * u, 9.5 * u, 8 * u, darker(lk.bottom, k));
+      if (pants) limb(kx, ky, ax, ay - 0.5 * u, 6.6 * u, 5 * u, darker(lk.bottom, k));   // trouser leg
+      // shoe: tips up as the foot lifts off at the back
+      const tilt = Math.max(0, -sa) * 0.5;
+      ctx.save(); ctx.translate(ax, ay); ctx.rotate(tilt);
+      ctx.fillStyle = darker(lk.shoes, k);
+      ctx.beginPath(); ctx.moveTo(-2.6 * u, -2.2 * u); ctx.lineTo(2 * u, -2.4 * u);
+      ctx.quadraticCurveTo(7.6 * u, -0.6 * u, 7.6 * u, 2.6 * u); ctx.lineTo(-3 * u, 2.6 * u); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = darker(shade(lk.shoes, lk.shoes === '#f4f4f4' || lk.shoes === '#dddddd' ? -0.25 : 0.35), k);
+      ctx.fillRect(-3 * u, 2 * u, 10.6 * u, 1.1 * u);
+      ctx.restore();
+    }
+
+    // Arms are drawn inside the leaning upper body, starting at the shoulder.
+    function arm(k) {
+      const p = back(k);
+      const sx = (k ? -2.5 : 1.5) * u, sy = -28 * u;
+      let ua = -amp * 0.85 * Math.sin(p), fa = ua + 0.18 + 0.3 * Math.max(0, -Math.sin(p));
+      if (!k && c.holding) { ua = 0.3; fa = 1.55; }              // holding the food out in front
+      if (!k && c.kind) { ua = 0.35; fa = 0.6; }                 // holding her walking stick
+      const ex = sx + Math.sin(ua) * 15 * u, ey = sy + Math.cos(ua) * 15 * u;
+      const wx = ex + Math.sin(fa) * 13 * u, wy = ey + Math.cos(fa) * 13 * u;
+      const longSleeve = lk.topStyle !== 'tee' && lk.topStyle !== 'dress' && lk.topStyle !== 'collar';
+      const sleeve = lk.topStyle === 'shawl' ? '#8a7a6c' : lk.top;
+      limb(sx, sy, ex, ey, 5.6 * u, 4.4 * u, darker(lk.skin, k));
+      limb(ex, ey, wx, wy, 4.4 * u, 3.4 * u, darker(lk.skin, k));
+      if (lk.topStyle !== 'dress') {
+        // sleeve: short for t-shirts and shirts, long for hoodies and jackets
+        const t = longSleeve ? 1 : 0.45;
+        limb(sx, sy, sx + (ex - sx) * t, sy + (ey - sy) * t, 6.4 * u, 5.4 * u, darker(sleeve, k));
+        if (longSleeve) limb(ex, ey, ex + (wx - ex) * 0.88, ey + (wy - ey) * 0.88, 5 * u, 4.2 * u, darker(sleeve, k));
+      }
+      // hand
+      ctx.save(); ctx.translate(wx, wy); ctx.rotate(-fa);
+      ctx.fillStyle = darker(lk.skin, k);
+      ctx.beginPath(); ctx.ellipse(0, 1.6 * u, 1.9 * u, 2.6 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(1.6 * u, 0.6 * u, 0.7 * u, 1.3 * u, -0.5, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+      return { wx: wx + Math.sin(fa) * 2 * u, wy: wy + Math.cos(fa) * 2 * u };
+    }
+
+    // long hair hangs down the back, behind the body
+    function hairBack() {
+      ctx.fillStyle = lk.hair;
+      if (lk.hairStyle === 'long') {
+        ctx.beginPath(); ctx.moveTo(-6.5 * u, -4 * u); ctx.quadraticCurveTo(-9 * u, 8 * u, -6 * u, 15 * u);
+        ctx.lineTo(1 * u, 13 * u); ctx.quadraticCurveTo(-1 * u, 6 * u, 0, -4 * u); ctx.closePath(); ctx.fill();
+      }
+      if (lk.hairStyle === 'curly') {
+        for (let i = 0; i < 11; i++) {
+          const a = Math.PI * (0.5 + i * 0.13);
+          ctx.beginPath(); ctx.arc(Math.cos(a) * 6.6 * u - 0.6 * u, -1 * u + Math.sin(a) * 7.2 * u, 2.5 * u, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+      if (lk.hairStyle === 'ponytail') {
+        ctx.save(); ctx.translate(-5.6 * u, -3.5 * u); ctx.rotate(0.5 + Math.sin(ph) * 0.15);
+        ctx.beginPath(); ctx.ellipse(0, 4.5 * u, 1.8 * u, 5.2 * u, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+      if (lk.hairStyle === 'bun') { ctx.beginPath(); ctx.arc(-5.6 * u, -6 * u, 2.6 * u, 0, Math.PI * 2); ctx.fill(); }
+    }
+
+    function head() {
+      const sk = lk.skin;
+      // skull and jaw
+      ctx.fillStyle = sk;
+      ctx.beginPath(); ctx.ellipse(0, -1 * u, 6 * u, 7 * u, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-4.2 * u, 0.5 * u); ctx.quadraticCurveTo(-2.2 * u, 6.6 * u, 2.6 * u, 6.7 * u);
+      ctx.quadraticCurveTo(5.3 * u, 6.3 * u, 5.7 * u, 3.4 * u); ctx.lineTo(5.9 * u, -1 * u); ctx.closePath(); ctx.fill();
+      // nose
+      ctx.beginPath(); ctx.moveTo(5.5 * u, -1.8 * u); ctx.quadraticCurveTo(7.8 * u, 1.6 * u, 7.3 * u, 2.3 * u);
+      ctx.quadraticCurveTo(6.7 * u, 2.9 * u, 5.7 * u, 2.6 * u); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = shade(sk, -0.22);
+      ctx.beginPath(); ctx.ellipse(6.4 * u, 2.3 * u, 0.55 * u, 0.3 * u, 0, 0, Math.PI * 2); ctx.fill();
+      // cheek
+      ctx.fillStyle = 'rgba(230,110,100,0.18)';
+      ctx.beginPath(); ctx.ellipse(2.2 * u, 1.8 * u, 1.6 * u, 1.1 * u, 0, 0, Math.PI * 2); ctx.fill();
+
+      // beard sits on the jaw
+      if (lk.beard) {
+        ctx.fillStyle = lk.hair;
+        ctx.beginPath(); ctx.moveTo(-2.8 * u, 0.2 * u); ctx.quadraticCurveTo(-1.6 * u, 6.9 * u, 2.7 * u, 7.2 * u);
+        ctx.quadraticCurveTo(5.8 * u, 6.8 * u, 6 * u, 3 * u); ctx.lineTo(5.2 * u, 2.7 * u);
+        ctx.quadraticCurveTo(4 * u, 4.6 * u, 2.4 * u, 3.2 * u); ctx.quadraticCurveTo(0, 2.4 * u, -2.8 * u, 0.2 * u); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(4.6 * u, 2.95 * u, 1.5 * u, 0.5 * u, -0.15, 0, Math.PI * 2); ctx.fill();   // moustache
+      }
+
+      // hair on the head
+      ctx.fillStyle = lk.hair;
+      const st = lk.hairStyle;
+      if (st === 'bald') {
+        ctx.beginPath(); ctx.moveTo(-6 * u, -2.5 * u); ctx.quadraticCurveTo(-6.6 * u, 1.5 * u, -3.8 * u, 2.6 * u);
+        ctx.lineTo(-2.6 * u, 0); ctx.quadraticCurveTo(-3.5 * u, -2 * u, -6 * u, -2.5 * u); ctx.fill();
+      } else {
+        const fringe = st === 'long' || st === 'ponytail' || st === 'bun';
+        ctx.beginPath();
+        ctx.moveTo(-6.3 * u, 1.5 * u);
+        ctx.quadraticCurveTo(-7.4 * u, -7.4 * u, -0.8 * u, -8.6 * u);
+        ctx.quadraticCurveTo(5.4 * u, -9 * u, 6.5 * u, -3.4 * u);
+        if (fringe) ctx.quadraticCurveTo(4 * u, -3.4 * u, 1.5 * u, -5.4 * u);
+        else ctx.quadraticCurveTo(3 * u, -5.6 * u, 0.4 * u, -4.4 * u);
+        ctx.quadraticCurveTo(-1.4 * u, -2 * u, -2.2 * u, 1.4 * u);
+        ctx.closePath();
+        if (st === 'buzz') ctx.globalAlpha = 0.75;
+        ctx.fill(); ctx.globalAlpha = 1;
+        // shine
+        ctx.strokeStyle = shade(lk.hair, 0.28); ctx.lineWidth = 0.6 * u;
+        ctx.beginPath(); ctx.arc(-0.5 * u, -1.5 * u, 6.4 * u, Math.PI * 1.22, Math.PI * 1.55); ctx.stroke();
+      }
+      // ear
+      ctx.fillStyle = shade(sk, -0.07);
+      ctx.beginPath(); ctx.ellipse(-1.6 * u, 0.4 * u, 1.3 * u, 2 * u, 0.1, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = shade(sk, -0.25); ctx.lineWidth = 0.35 * u;
+      ctx.beginPath(); ctx.arc(-1.5 * u, 0.4 * u, 0.8 * u, -1.2, 1.4); ctx.stroke();
+
+      // eyes looking where they walk
+      for (const [ex, w] of [[1.6 * u, 0.95], [4.4 * u, 0.8]]) {
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath(); ctx.ellipse(ex, -0.9 * u, w * u, 0.62 * u, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = lk.eyes; ctx.beginPath(); ctx.arc(ex + 0.3 * u, -0.9 * u, 0.55 * u, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(ex + 0.35 * u, -0.9 * u, 0.27 * u, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ex + 0.5 * u, -1.1 * u, 0.12 * u, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = shade(sk, -0.45); ctx.lineWidth = 0.35 * u;
+        ctx.beginPath(); ctx.ellipse(ex, -0.9 * u, w * u, 0.62 * u, 0, Math.PI * 1.05, Math.PI * 1.95); ctx.stroke();
+        // eyebrow (raised when happy, angled when sad)
+        const lift = c.mood === 'happy' ? -0.35 : 0;
+        const tilt = c.mood === 'sad' ? (ex < 3 * u ? -0.5 : 0.5) : 0;
+        ctx.strokeStyle = st === 'bald' ? shade(sk, -0.5) : shade(lk.hair, -0.05); ctx.lineWidth = 0.55 * u;
+        ctx.beginPath(); ctx.moveTo(ex - 1 * u, (-2.4 + lift + tilt * 0.5) * u); ctx.quadraticCurveTo(ex, (-2.9 + lift) * u, ex + 1 * u, (-2.5 + lift - tilt * 0.5) * u); ctx.stroke();
+      }
+      // mouth
+      const lip = lk.beard ? '#d9a08a' : shade(sk, -0.32);
+      ctx.strokeStyle = lip; ctx.lineWidth = 0.55 * u; ctx.lineCap = 'round';
+      ctx.beginPath();
+      if (c.mood === 'happy') {
+        ctx.moveTo(2.4 * u, 3.4 * u); ctx.quadraticCurveTo(3.8 * u, 5 * u, 5.2 * u, 3.2 * u); ctx.stroke();
+        ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(2.7 * u, 3.6 * u); ctx.quadraticCurveTo(3.8 * u, 4.5 * u, 5 * u, 3.4 * u); ctx.closePath(); ctx.fill();
+      } else if (c.mood === 'sad') {
+        ctx.moveTo(2.6 * u, 4.3 * u); ctx.quadraticCurveTo(3.8 * u, 3.3 * u, 5 * u, 4 * u); ctx.stroke();
+      } else {
+        ctx.moveTo(2.7 * u, 3.8 * u); ctx.quadraticCurveTo(3.9 * u, 4.1 * u, 5 * u, 3.6 * u); ctx.stroke();
+      }
+      if (lk.glasses) {
+        ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 0.4 * u;
+        ctx.beginPath(); ctx.roundRect(0.3 * u, -2 * u, 2.6 * u, 2.2 * u, 0.7 * u); ctx.stroke();
+        ctx.beginPath(); ctx.roundRect(3.5 * u, -2 * u, 2.2 * u, 2.2 * u, 0.7 * u); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(2.9 * u, -1.2 * u); ctx.lineTo(3.5 * u, -1.2 * u); ctx.moveTo(0.3 * u, -1.2 * u); ctx.lineTo(-1.2 * u, -0.6 * u); ctx.stroke();
+      }
+    }
+
+    // ---- draw, back to front ----
+    // with a skirt or dress both legs go behind the clothes; with trousers the front leg goes on top
+    const skirted = lk.legs === 'skirt' || lk.legs === 'dress' || lk.legs === 'longskirt';
+    leg(1);
+    if (skirted) leg(0);
+    ctx.save();
+    ctx.translate(hx, hipY); ctx.rotate(lk.lean + 0.02 * Math.sin(ph * 2));   // lean forward a little while walking
+    const hs = lk.headScale;
+    const headY = -43 * u - (hs - 1) * 6 * u;
+    ctx.save(); ctx.translate(1 * u, headY); ctx.scale(hs, hs); hairBack(); ctx.restore();
+    if (lk.bag === 'backpack') {
+      ctx.fillStyle = lk.bagColor;
+      ctx.beginPath(); ctx.roundRect(-14 * u, -29 * u, 7.5 * u, 17 * u, 2.5 * u); ctx.fill();
+      ctx.fillStyle = shade(lk.bagColor, -0.2); ctx.beginPath(); ctx.roundRect(-15 * u, -20 * u, 4 * u, 7 * u, 1.5 * u); ctx.fill();
+    }
+    arm(1);
+
+    // body (torso), shaded darker at the back
+    const grad = ctx.createLinearGradient(-9 * u, 0, 6 * u, 0);
+    const bodyCol = lk.topStyle === 'shawl' ? '#8a7a6c' : lk.top;
+    grad.addColorStop(0, shade(bodyCol, -0.2)); grad.addColorStop(1, bodyCol);
+    if (lk.legs === 'pants' || lk.legs === 'shorts') {
+      ctx.fillStyle = lk.bottom;
+      ctx.beginPath(); ctx.moveTo(-8.6 * u, -6 * u); ctx.lineTo(8.4 * u, -6 * u); ctx.lineTo(8.6 * u, 5 * u); ctx.lineTo(-9 * u, 5 * u); ctx.closePath(); ctx.fill();
+    }
+    if (lk.legs === 'skirt' || lk.legs === 'dress' || lk.legs === 'longskirt') {
+      const len = lk.legs === 'longskirt' ? 40 : lk.legs === 'dress' ? 22 : 18;
+      const col = lk.legs === 'dress' ? lk.top : lk.bottom;
+      const g2 = ctx.createLinearGradient(-12 * u, 0, 10 * u, 0);
+      g2.addColorStop(0, shade(col, -0.2)); g2.addColorStop(1, col);
+      ctx.fillStyle = g2;
+      ctx.beginPath(); ctx.moveTo(-8.4 * u, -7 * u); ctx.lineTo(8 * u, -7 * u);
+      ctx.quadraticCurveTo(11 * u + Math.sin(ph) * u, len * 0.6 * u, 12 * u + Math.sin(ph) * 2 * u, len * u);
+      ctx.lineTo(-12 * u + Math.sin(ph) * 2 * u, len * u); ctx.quadraticCurveTo(-11 * u, len * 0.6 * u, -8.4 * u, -7 * u); ctx.fill();
+    }
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    const hem = lk.legs === 'pants' || lk.legs === 'shorts' ? 1.5 : -6;
+    ctx.moveTo(-8.6 * u, hem * u); ctx.lineTo(8.6 * u, hem * u);
+    ctx.quadraticCurveTo(6.6 * u, -6 * u, 7.4 * u, -14 * u);
+    ctx.quadraticCurveTo(9.2 * u, -22 * u, 5.6 * u, -30.5 * u);
+    ctx.quadraticCurveTo(0, -33 * u, -7 * u, -30.5 * u);
+    ctx.quadraticCurveTo(-9.8 * u, -22 * u, -7.2 * u, -12 * u);
+    ctx.quadraticCurveTo(-8.2 * u, -4 * u, -8.6 * u, hem * u);
+    ctx.fill();
+    // clothing details
+    const ts = lk.topStyle;
+    if (ts === 'jacket') {
+      ctx.fillStyle = lk.inner;
+      ctx.beginPath(); ctx.moveTo(2.5 * u, -31 * u); ctx.lineTo(6 * u, -30.5 * u); ctx.quadraticCurveTo(9 * u, -22 * u, 7.4 * u, -14 * u);
+      ctx.quadraticCurveTo(6.8 * u, -6 * u, 8.2 * u, hem * u); ctx.lineTo(4.5 * u, hem * u); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = shade(lk.top, -0.3); ctx.lineWidth = 0.5 * u;
+      ctx.beginPath(); ctx.moveTo(2.5 * u, -31 * u); ctx.lineTo(4.8 * u, -22 * u); ctx.lineTo(4.5 * u, hem * u); ctx.stroke();
+    }
+    if (ts === 'hoodie') {
+      ctx.fillStyle = shade(lk.top, -0.12);
+      ctx.beginPath(); ctx.ellipse(-4.5 * u, -30 * u, 5 * u, 3 * u, -0.2, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(-1 * u, -11 * u, 8 * u, 6 * u, 1.5 * u); ctx.fill();
+      ctx.strokeStyle = '#eeeeee'; ctx.lineWidth = 0.4 * u;
+      ctx.beginPath(); ctx.moveTo(3.5 * u, -30 * u); ctx.lineTo(3.8 * u, -24 * u); ctx.moveTo(5 * u, -30 * u); ctx.lineTo(5.4 * u, -25 * u); ctx.stroke();
+    }
+    if (ts === 'collar') {
+      ctx.fillStyle = shade(lk.top, 0.35);
+      ctx.beginPath(); ctx.moveTo(0, -31.5 * u); ctx.lineTo(5.5 * u, -30.5 * u); ctx.lineTo(3.4 * u, -27.4 * u); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = shade(lk.top, -0.3);
+      for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(5.6 * u, (-26 + i * 6) * u, 0.45 * u, 0, Math.PI * 2); ctx.fill(); }
+    }
+    if (ts === 'tee' || ts === 'long' || ts === 'dress') {
+      ctx.strokeStyle = shade(bodyCol, -0.25); ctx.lineWidth = 0.5 * u;
+      ctx.beginPath(); ctx.moveTo(-0.5 * u, -31.6 * u); ctx.quadraticCurveTo(2.5 * u, -28.5 * u, 5.5 * u, -30.6 * u); ctx.stroke();
+    }
+    if (lk.legs === 'pants' || lk.legs === 'shorts') {
+      ctx.fillStyle = shade(lk.bottom, -0.35);
+      ctx.fillRect(-8.6 * u, (hem - 1) * u, 17.2 * u, 1 * u);        // belt line
+    }
+    if (ts === 'shawl') {
+      ctx.fillStyle = '#5f86a6';
+      ctx.beginPath(); ctx.moveTo(-9 * u, -27 * u); ctx.quadraticCurveTo(0, -35 * u, 7.5 * u, -28 * u);
+      ctx.lineTo(4 * u, -15 * u); ctx.lineTo(-3 * u, -17 * u); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = '#4b6e8c'; ctx.lineWidth = 0.4 * u;
+      for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.moveTo((-3 + i * 2.2) * u, -17 * u + i * 0.5 * u); ctx.lineTo((-2.6 + i * 2.2) * u, -14.5 * u + i * 0.5 * u); ctx.stroke(); }
+      ctx.fillStyle = '#c9a66b'; ctx.fillRect(-6.5 * u, -9 * u, 3.5 * u, 3.5 * u);   // patch on her coat
+    }
+    if (lk.bag === 'backpack') {
+      ctx.strokeStyle = shade(lk.bagColor, -0.25); ctx.lineWidth = 1.2 * u;
+      ctx.beginPath(); ctx.moveTo(-2 * u, -31 * u); ctx.quadraticCurveTo(3 * u, -24 * u, 1 * u, -15 * u); ctx.stroke();
+    }
+    if (lk.bag === 'handbag') {
+      ctx.strokeStyle = shade(lk.bagColor, -0.25); ctx.lineWidth = 0.8 * u;
+      ctx.beginPath(); ctx.moveTo(-3 * u, -30.5 * u); ctx.lineTo(-8 * u, -6 * u); ctx.stroke();
+      ctx.fillStyle = lk.bagColor; ctx.beginPath(); ctx.roundRect(-12 * u, -7 * u, 8 * u, 6.5 * u, 1.5 * u); ctx.fill();
+      ctx.fillStyle = shade(lk.bagColor, 0.3); ctx.fillRect(-9 * u, -5 * u, 2 * u, 0.8 * u);
+    }
+
+    // neck, then head
+    ctx.fillStyle = shade(lk.skin, -0.1);
+    ctx.beginPath(); ctx.roundRect(-1.6 * u, -37.5 * u, 4.6 * u, 8 * u, 1.5 * u); ctx.fill();
+    ctx.save(); ctx.translate(1 * u, headY); ctx.scale(hs, hs); head(); ctx.restore();
+
+    // front arm on top (and whatever they're holding)
+    const hand = arm(0);
+    if (c.holding) drawHeld(c.holding, c.holdStyle, hand.wx + 2.5 * u, hand.wy - 4.5 * u, 5.2 * u);
+    if (c.kind) {
+      ctx.strokeStyle = '#6b4423'; ctx.lineWidth = 1.3 * u; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(hand.wx, hand.wy - 1 * u); ctx.lineTo(hand.wx + 3 * u, floorY - hipY - 1 * u); ctx.stroke();
+      ctx.beginPath(); ctx.arc(hand.wx - 1.2 * u, hand.wy - 1 * u, 1.2 * u, Math.PI, 0); ctx.stroke();
+    }
+    ctx.restore();
+    if (!skirted) leg(0);
+    return hipY + headY - 7.5 * u * hs;   // top of the head
+  }
+
+  function drawBubble(c, cx, headTop, L) {
+    const bh = L.bh;
+    ctx.textBaseline = 'middle';
+    let lines, bw, iconW = 0;
+    if (c.say) {
+      font(15);
+      lines = wrapLines(c.say, 190);
+      bw = Math.max(...lines.map(l => ctx.measureText(l).width)) + 24;
+    } else {
+      font(17);
+      lines = c.wants.map(f => FOOD[f].name);
+      iconW = 30;
+      const w1 = Math.max(...lines.map(l => ctx.measureText(l).width)) + (c.wants.length > 1 ? 20 : 0);
+      font(14); const w2 = ctx.measureText(STYLES[c.style].name).width + 20;
+      bw = Math.max(w1, w2) + iconW + 26;
+    }
+    // one row per food, plus a row for how they want it
+    const h = iconW ? Math.max(bh, 14 + (c.wants.length + 1) * 19) : Math.max(bh, lines.length * 18 + 14);
+    let by = headTop - 12 - h;
+    by = Math.max(136, by);    // stay below the Day and Special boxes
+    const bx = Math.max(8, Math.min(W - bw - 8, cx + L.r * 0.4 - bw / 2));
+    const tipX = Math.max(bx + 14, Math.min(bx + bw - 14, cx + L.r * 0.4));
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    ctx.beginPath(); ctx.roundRect(bx + 2, by + 3, bw, h, 14); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, h, 14); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(tipX - 7, by + h - 1); ctx.lineTo(tipX + 7, by + h - 1); ctx.lineTo(cx + L.r * 0.4, headTop - 5); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = c.mood === 'sad' ? '#a33' : '#3b2a20';
+    if (iconW) {
+      const row = k => by + 7 + 19 * k + 9.5 + (h - 14 - (c.wants.length + 1) * 19) / 2;
+      c.wants.forEach((f, k) => {
+        const y = row(k), done = c.got[k];
+        ctx.globalAlpha = done ? 0.45 : 1;
+        drawFood(f, bx + 10 + iconW / 2, y, 8.5);
+        font(17); ctx.fillStyle = '#3b2a20'; ctx.textAlign = 'left';
+        ctx.fillText(lines[k], bx + 12 + iconW, y + 1);
+        ctx.globalAlpha = 1;
+        if (done) {
+          // green tick: already given
+          const tx = bx + 12 + iconW + ctx.measureText(lines[k]).width + 6;
+          ctx.strokeStyle = '#2e9e4f'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+          ctx.beginPath(); ctx.moveTo(tx, y); ctx.lineTo(tx + 4, y + 4); ctx.lineTo(tx + 11, y - 5); ctx.stroke();
+        }
+      });
+      // last row: how they want it
+      const sy = row(c.wants.length);
+      drawStyleIcon(c.style, bx + 10 + iconW / 2, sy, 7);
+      font(14); ctx.fillStyle = STYLE_COLOR[c.style]; ctx.textAlign = 'left'; ctx.fillText(STYLES[c.style].name, bx + 12 + iconW, sy + 1);
+      if (c.wants.includes(special)) star(bx + bw - 4, by + 4, 8, '#ffb020');
+    } else {
+      ctx.textAlign = 'center';
+      lines.forEach((l, i) => ctx.fillText(l, bx + bw / 2, by + h / 2 + (i - (lines.length - 1) / 2) * 18 + 1));
+    }
+  }
+
+  const STYLE_COLOR = { wrap: '#9a6a2a', box: '#8a4f1f', allergy: '#2e8b46' };
+
+  // Small picture for each way of making food.
+  function drawStyleIcon(type, x, y, s) {
+    ctx.save(); ctx.translate(x, y); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    if (type === 'wrap') {
+      // paper parcel with twisted ends, like a wrapped sandwich
+      ctx.fillStyle = '#f1dfb8';
+      ctx.beginPath(); ctx.moveTo(-s * 1.2, -s * 0.55); ctx.lineTo(-s * 0.7, 0); ctx.lineTo(-s * 1.2, s * 0.55); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(s * 1.2, -s * 0.55); ctx.lineTo(s * 0.7, 0); ctx.lineTo(s * 1.2, s * 0.55); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(-s * 0.8, -s * 0.55, s * 1.6, s * 1.1, s * 0.3); ctx.fill();
+      ctx.strokeStyle = '#c9a66b'; ctx.lineWidth = Math.max(1, s * 0.14);
+      ctx.beginPath(); ctx.roundRect(-s * 0.8, -s * 0.55, s * 1.6, s * 1.1, s * 0.3); ctx.stroke();
+      ctx.strokeStyle = '#e05a6e'; ctx.beginPath(); ctx.moveTo(0, -s * 0.55); ctx.lineTo(0, s * 0.55); ctx.stroke();
+    } else if (type === 'box') {
+      // takeaway box with a handle
+      ctx.strokeStyle = '#7a4a26'; ctx.lineWidth = Math.max(1, s * 0.16);
+      ctx.beginPath(); ctx.arc(0, -s * 0.55, s * 0.45, Math.PI, 0); ctx.stroke();
+      ctx.fillStyle = '#d29a5c';
+      ctx.beginPath(); ctx.moveTo(-s * 0.95, -s * 0.5); ctx.lineTo(s * 0.95, -s * 0.5); ctx.lineTo(s * 0.75, s * 0.8); ctx.lineTo(-s * 0.75, s * 0.8); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#b97d3f'; ctx.fillRect(-s * 0.95, -s * 0.5, s * 1.9, s * 0.3);
+    } else if (type === 'allergy') {
+      // green badge with a tick: made specially, safe for allergies
+      ctx.fillStyle = '#2e9e4f';
+      ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s * 0.9, -s * 0.6); ctx.quadraticCurveTo(s * 0.9, s * 0.5, 0, s);
+      ctx.quadraticCurveTo(-s * 0.9, s * 0.5, -s * 0.9, -s * 0.6); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(1.2, s * 0.22);
+      ctx.beginPath(); ctx.moveTo(-s * 0.4, 0); ctx.lineTo(-s * 0.08, s * 0.32); ctx.lineTo(s * 0.45, -s * 0.3); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // What a happy customer carries: their food, wrapped, boxed or with an allergy-safe sticker.
+  function drawHeld(food, how, x, y, s) {
+    if (how === 'box') {
+      drawStyleIcon('box', x, y + s * 0.2, s * 1.1);
+    } else if (how === 'wrap') {
+      drawStyleIcon('wrap', x, y + s * 0.2, s * 0.95);
+    } else {
+      drawFood(food, x, y, s);
+      if (how === 'allergy') drawStyleIcon('allergy', x + s * 0.8, y - s * 0.6, s * 0.5);
+    }
+  }
+
+  function drawStyleButtons(L) {
+    L.styleBtns.forEach((b, i) => {
+      const s = STYLE_LIST[i], on = s === style;
+      ctx.fillStyle = on ? '#ffe2a8' : '#fff7ea';
+      ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, b.h / 2); ctx.fill();
+      ctx.lineWidth = on ? 4 : 2; ctx.strokeStyle = on ? '#ff9f1c' : '#7a4527'; ctx.stroke();
+      drawStyleIcon(s, b.x + 20, b.y + b.h / 2, 9);
+      ctx.fillStyle = '#3b2a20'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      fitFont(STYLES[s].name, 16, b.w - 42);
+      ctx.fillText(STYLES[s].name, b.x + 34, b.y + b.h / 2 + 1);
+      if (W >= 700) { font(11); ctx.fillStyle = '#9a7a5a'; ctx.textAlign = 'right'; ctx.fillText(STYLE_KEYS[i].toUpperCase(), b.x + b.w - 14, b.y + b.h / 2 + 1); }
+    });
+  }
+
+  // Rainbow polka-dot wallpaper. Drawn once and kept, so it doesn't slow the game down.
+  let wallCache = null;
+  function wallpaper(w, h) {
+    const key = w + 'x' + h + 'x' + DPR;
+    if (wallCache && wallCache.key === key) return wallCache.c;
+    const c = document.createElement('canvas');
+    c.width = Math.ceil(w * DPR); c.height = Math.ceil(h * DPR);
+    const g = c.getContext('2d'); g.scale(DPR, DPR);
+    g.fillStyle = '#fff8ee'; g.fillRect(0, 0, w, h);
+    const RAINBOW = ['#ff6b6b', '#ffa94d', '#ffd43b', '#69db7c', '#4dabf7', '#748ffc', '#da77f2'];
+    const sp = 46, rr = 9;
+    for (let row = 0, y = 14; y < h + sp; row++, y += sp * 0.8) {
+      for (let col = 0, x = (row % 2 ? sp / 2 : 0) + 10; x < w + sp; col++, x += sp) {
+        g.fillStyle = RAINBOW[(col + row) % RAINBOW.length];
+        g.beginPath(); g.arc(x, y, rr, 0, Math.PI * 2); g.fill();
+      }
+    }
+    wallCache = { key, c };
+    return c;
+  }
+
+  function drawCafe(L) {
+    const { counterY, floorY, r } = L;
+    ctx.drawImage(wallpaper(W, counterY), 0, 0, W, counterY);
+    // small window
+    const ww = Math.min(W * 0.16, 130), wh = Math.min(floorY * 0.17, 88), wx = W - ww - W * 0.05, wy = Math.max(150, floorY * 0.3);
+    ctx.fillStyle = '#9fd8ff'; ctx.fillRect(wx, wy, ww, wh);
+    ctx.fillStyle = '#ffd34d'; ctx.beginPath(); ctx.arc(wx + ww * 0.75, wy + wh * 0.3, Math.min(ww, wh) * 0.15, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#8a5a3a'; ctx.lineWidth = 5; ctx.strokeRect(wx, wy, ww, wh);
+    ctx.beginPath(); ctx.moveTo(wx + ww / 2, wy); ctx.lineTo(wx + ww / 2, wy + wh); ctx.moveTo(wx, wy + wh / 2); ctx.lineTo(wx + ww, wy + wh / 2); ctx.stroke();
+    // skirting board and wooden floor where people walk
+    const fTop = floorY - r * 0.9;
+    ctx.fillStyle = '#c98552'; ctx.fillRect(0, fTop - 8, W, 8);
+    ctx.fillStyle = '#d9a873'; ctx.fillRect(0, fTop, W, counterY - fTop);
+    ctx.strokeStyle = '#c4915c'; ctx.lineWidth = 2;
+    for (let y = fTop + 10; y < counterY; y += 12) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  }
+  function drawCounter(L) {
+    const { counterY } = L;
+    ctx.fillStyle = '#a0643c'; ctx.fillRect(0, counterY, W, H - counterY);
+    ctx.fillStyle = '#7a4527'; ctx.fillRect(0, counterY, W, 16);
+    ctx.fillStyle = '#c98552'; ctx.fillRect(0, counterY - 6, W, 8);
+  }
+
+  function drawInfo() {
+    const y = 76;
+    ctx.textBaseline = 'middle';
+    font(17);
+    const label = 'Day ' + day + (state === 'serve' ? '   Customer ' + Math.max(1, spawned) + ' of ' + PER_DAY : '');
+    const lw = ctx.measureText(label).width + 24;
+    ctx.fillStyle = '#2f3b33'; ctx.beginPath(); ctx.roundRect(10, y - 16, lw, 32, 8); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.fillText(label, 22, y + 1);
+    if (special && state === 'serve') {
+      const sl = 'Special: ' + FOOD[special].name;
+      const sw = ctx.measureText(sl).width + 50;
+      ctx.fillStyle = '#2f3b33'; ctx.beginPath(); ctx.roundRect(10, y + 22, sw, 32, 8); ctx.fill();
+      star(28, y + 38, 10, '#ffc93c');
+      ctx.fillStyle = '#fff'; ctx.fillText(sl, 44, y + 39);
+    }
+    if (state === 'serve') {
+      // daily goal: happy customers
+      const hl = 'Happy ' + dayHappy + ' / ' + GOAL;
+      font(17); const hw = ctx.measureText(hl).width + 24;
+      ctx.fillStyle = dayHappy >= GOAL ? '#2e7d32' : '#2f3b33';
+      ctx.beginPath(); ctx.roundRect(W - 10 - hw, y - 16, hw, 32, 8); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'right'; ctx.fillText(hl, W - 22, y + 1);
+    }
+  }
+
+  function drawButtons(L) {
+    L.btns.forEach((b, i) => {
+      const it = todays[i]; if (!it) return;
+      const isSpecial = it.type === special;
+      ctx.fillStyle = '#fff7ea';
+      ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 16); ctx.fill();
+      ctx.lineWidth = isSpecial ? 5 : 3; ctx.strokeStyle = isSpecial ? '#ffb020' : '#7a4527'; ctx.stroke();
+      drawFood(it.type, b.x + b.w / 2, b.y + b.h * 0.42, Math.min(b.w, b.h) * 0.22);
+      ctx.fillStyle = '#3b2a20'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const nm = FOOD[it.type].name;
+      fitFont(nm, Math.max(13, Math.min(19, b.w * 0.13)), b.w - 8);
+      ctx.fillText(nm, b.x + b.w / 2, b.y + b.h * 0.84);
+      font(13); ctx.fillStyle = '#7a4527'; ctx.textAlign = 'left'; ctx.fillText(String(i + 1), b.x + 8, b.y + 14);
+      if (isSpecial) star(b.x + b.w - 15, b.y + 15, 10, '#ffb020');
+    });
+  }
+
+  function drawPick() {
+    ctx.fillStyle = '#0006'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const g = cardRects(), rects = g.rects;
+    const titleY = Math.max(140, g.top - 30);
+    font(Math.min(34, W * 0.07)); ctx.fillText("Today's menu", W / 2, titleY - 34);
+    const sub = 'Choose your special! It pays double when someone orders it.';
+    fitFont(sub, Math.min(20, W * 0.045), W - 24, false);
+    ctx.fillText(sub, W / 2, titleY);
+    rects.forEach((r, i) => {
+      const it = todays[i];
+      ctx.fillStyle = '#fff7ea'; ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 16); ctx.fill();
+      ctx.lineWidth = 4; ctx.strokeStyle = '#ffb020'; ctx.stroke();
+      drawFood(it.type, r.x + r.w / 2, r.y + r.h * 0.36, Math.min(r.w, r.h * 0.8) * 0.24);
+      ctx.fillStyle = '#3b2a20'; ctx.textAlign = 'center';
+      fitFont(FOOD[it.type].name, Math.max(14, Math.min(21, r.w * 0.13)), r.w - 8);
+      ctx.fillText(FOOD[it.type].name, r.x + r.w / 2, r.y + r.h * 0.72);
+      font(Math.max(12, Math.min(18, r.w * 0.11)), false); ctx.fillText(it.price + ' coins', r.x + r.w / 2, r.y + r.h * 0.87);
+      font(13); ctx.fillStyle = '#7a4527'; ctx.textAlign = 'left'; ctx.fillText(String(i + 1), r.x + 8, r.y + 14);
+    });
+  }
+
+  function drawDayEnd() {
+    ctx.fillStyle = '#0008'; ctx.fillRect(0, 0, W, H);
+    const pw = Math.min(W - 32, 440), ph = 280, px = (W - pw) / 2, py = (H - ph) / 2;
+    ctx.fillStyle = '#fff7ea'; ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 22); ctx.fill();
+    ctx.fillStyle = '#3b2a20'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    font(32); ctx.fillText('Day ' + day + ' done!', W / 2, py + 45);
+    const line = (t, y) => { fitFont(t, 20, pw - 24, false); ctx.fillText(t, W / 2, y); };
+    line('You earned ' + dayCoins + ' coins today', py + 95);
+    line('Happy customers: ' + dayHappy + ' of ' + PER_DAY, py + 128);
+    ctx.fillStyle = '#7a4527';
+    line(twoChance() < 0.5 ? 'Tomorrow: more people ask for two things!' : 'See you tomorrow!', py + 172);
+    if (screenT > 0.6) { font(20); ctx.fillStyle = '#c2611f'; ctx.fillText('Tap to open tomorrow', W / 2, py + 232); }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    const L = layout();
+    drawCafe(L);
+    const bubbles = [];
+    if (state === 'serve') {
+      // people further left are drawn first; each one remembers where its head is for the bubble
+      for (const p of people.slice().sort((a, b) => a.x - b.x)) {
+        const top = drawPerson(p, p.x, L.floorY, L.hp);
+        const showSay = p.status === 'wait' || (p.status === 'done' && p.sayT < 1.3);
+        if (showSay && p.x > -L.r) bubbles.push([p, p.x, top]);
+      }
+    }
+    drawCounter(L);
+    // the customer closest to leaving gets their bubble drawn on top
+    for (const [p, x, t] of bubbles) drawBubble(p, x, t, L);
+    if (state === 'serve') {
+      if (day === 1 && spawned <= 4) {
+        const tip = 'Pick how they want it, then tap their food!';
+        ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        fitFont(tip, 15, W - 20);
+        ctx.fillText(tip, W / 2, L.counterY + 18);
+      }
+      drawStyleButtons(L);
+      drawButtons(L);
+    }
+    if (state !== 'title') drawInfo();
+    for (const p of pops) {
+      ctx.globalAlpha = Math.max(0, 1 - p.t / 1.3);
+      font(24); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 5; ctx.strokeStyle = '#3b2a20'; ctx.strokeText(p.text, p.x, p.y);
+      ctx.fillStyle = p.color; ctx.fillText(p.text, p.x, p.y);
+      ctx.globalAlpha = 1;
+    }
+    if (state === 'pick') drawPick();
+    if (state === 'dayEnd') drawDayEnd();
+    if (paused && running) {
+      ctx.fillStyle = '#0009'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#fff'; font(40); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('Paused', W / 2, H / 2);
+    }
+  }
+
+  // ===== LOOP (keep) =====
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (running && !paused) update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
