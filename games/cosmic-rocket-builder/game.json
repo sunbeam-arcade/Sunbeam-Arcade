@@ -1,0 +1,10 @@
+{
+  "title": "Cosmic Rocket Builder",
+  "creator": "Rainbows",
+  "description": "Build a rocket from engines, fuel tanks, stages, boosters and magic star crystals, then launch it! Clever builds reach the Moon, Mars, other stars and even other galaxies. Silly builds go POOF!",
+  "controls": "Tap a part, then tap the grid to build. Tap Launch to fly. On a computer: number keys pick parts, arrow keys and Space build, L launches.",
+  "tags": ["building", "space", "puzzle"],
+  "orientation": "any",
+  "added": "2026-11-08",
+  "status": "live"
+}
