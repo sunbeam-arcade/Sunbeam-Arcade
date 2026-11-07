@@ -36,7 +36,7 @@ games/
 }
 ```
 
-- `creator`: `"Sunshine"`, `"Lollipops"`, or `"Sunshine & Lollipops"` for a team game. These are the makers' public names.
+- `creator`: `"Sunshine"`, `"Lollipops"`, `"Sunshine & Lollipops"` for a team game, or `"Rainbows"`. These are the only public maker names.
 - `orientation`: `"any"`, `"landscape"` or `"portrait"`
 - `status`: `"live"` to show it, `"hidden"` to keep it off the homepage
 
@@ -63,7 +63,7 @@ If `game.json` is missing or broken, the game is skipped (never published half-m
 - No chat, no sign-up, no asking for names, ages, emails, photos or location.
 - No ads, no buy buttons, no links out of the game. The only link is the Arcade back button.
 - Original ideas, characters, names and art. No characters, logos, music or names from existing games, shows or brands (no Mario, Minecraft, Pokemon, etc.). Inspired-by gameplay is fine; copied looks are not.
-- **Never use the kids' real names anywhere**: not in game text, credits, file names, comments, `game.json` or thumbnails. The makers are only ever "Sunshine" and "Lollipops". No school, suburb, age, photos or voices of the kids either.
+- **Never use the kids' real names anywhere**: not in game text, credits, file names, comments, `game.json` or thumbnails. The makers are only ever "Sunshine", "Lollipops" or "Rainbows". No school, suburb, age, photos or voices of the kids either.
 
 ## 4. Portal-ready rules (so the best games can earn on CrazyGames / itch.io)
 

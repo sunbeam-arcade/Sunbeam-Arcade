@@ -1,0 +1,10 @@
+{
+  "title": "Space Sweeper",
+  "creator": "Rainbows",
+  "description": "Fly your rocket, scoop up space junk and find rocket parts on blue planets to build a bigger rocket. Reach level 5 to meet the aliens on the red planet!",
+  "controls": "Drag to fly and tap BOOST. On a planet tap the arrows to walk and FLY to take off. Arrow keys, Space and P on a computer.",
+  "tags": ["space", "adventure", "flying"],
+  "orientation": "any",
+  "added": "2026-11-08",
+  "status": "live"
+}
